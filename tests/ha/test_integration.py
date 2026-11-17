@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import async_capture_events
 
 from custom_components.petra_tracker.const import (
+    EVENT_CAR_NOT_ASSIGNED,
     EVENT_CONNECTION_DEGRADED,
     EVENT_CONNECTION_RESTORED,
     EVENT_ETA_CHANGED,
@@ -209,3 +210,78 @@ async def test_unload(hass, aioclient_mock, frozen):
     entry = await setup(hass)
     assert await hass.config_entries.async_unload(entry.entry_id)
     assert entry.state is ConfigEntryState.NOT_LOADED
+
+
+# -- "car not assigned" warning and restarts ---------------------------------------
+
+async def test_car_not_assigned_event_fires_once(hass, aioclient_mock, frozen):
+    mock_api(aioclient_mock)  # still only booked
+    entry = await setup(hass)
+    late = async_capture_events(hass, EVENT_CAR_NOT_ASSIGNED)
+    frozen.move_to(syn.PICKUP_TIME - timedelta(minutes=2))
+    await refresh(hass, entry)
+    assert late == []
+    frozen.move_to(syn.PICKUP_TIME - timedelta(seconds=50))
+    await refresh(hass, entry)
+    frozen.move_to(syn.PICKUP_TIME + timedelta(minutes=3))
+    await refresh(hass, entry)
+    assert len(late) == 1
+    assert late[0].data["person_name"] == "Alex" and late[0].data["pickup_passed"] is False
+
+
+async def test_restart_does_not_repeat_or_invent_notifications(hass, aioclient_mock, frozen):
+    mock_api(aioclient_mock)
+    entry = await setup(hass)
+    frozen.move_to(syn.PICKUP_TIME - timedelta(seconds=30))
+    await refresh(hass, entry)  # car_not_assigned sent
+    frozen.move_to(ASSIGNED + timedelta(minutes=10))
+    mock_api(aioclient_mock, *arriving(ASSIGNED + timedelta(minutes=10)))
+    await refresh(hass, entry)  # approaching sent
+
+    events = async_capture_events(hass, EVENT_STATE_CHANGED)
+    late = async_capture_events(hass, EVENT_CAR_NOT_ASSIGNED)
+    eta = async_capture_events(hass, EVENT_ETA_CHANGED)
+    frozen.tick(timedelta(seconds=30))
+    assert await hass.config_entries.async_reload(entry.entry_id)  # like a restart
+    await hass.async_block_till_done()
+    assert (events, late, eta) == ([], [], [])
+    assert hass.states.get(STATUS).state == "approaching"
+
+    # A real change after the restart is still announced, relative to before.
+    arrived = syn.order(combined="arrived", state="customer", car_no=syn.CAR_NO,
+                        assigned=ASSIGNED, events=[(3, syn.PICKUP_TIME)])
+    mock_api(aioclient_mock, syn.order_list(arrived), syn.detail(arrived, []))
+    await refresh(hass, entry)
+    assert [(e.data["old_status"], e.data["new_status"]) for e in events] == [
+        ("approaching", "at_pickup")
+    ]
+
+
+async def test_change_during_downtime_is_announced_once(hass, aioclient_mock, frozen):
+    frozen.move_to(ASSIGNED + timedelta(minutes=2))
+    mock_api(aioclient_mock, *arriving(ASSIGNED + timedelta(minutes=2)))
+    entry = await setup(hass)
+    events = async_capture_events(hass, EVENT_STATE_CHANGED)
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    frozen.move_to(syn.PICKUP_TIME + timedelta(minutes=3))  # HA was off for ~8 minutes
+    onboard = syn.order(combined="personIn", state="customer", car_no=syn.CAR_NO,
+                        assigned=ASSIGNED, started=syn.PICKUP_TIME + timedelta(minutes=2),
+                        events=[(3, syn.PICKUP_TIME), (0, syn.PICKUP_TIME + timedelta(minutes=2))])
+    mock_api(aioclient_mock, syn.order_list(onboard), syn.detail(onboard, []))
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert [(e.data["old_status"], e.data["new_status"]) for e in events] == [
+        ("approaching", "onboard")
+    ]
+
+
+async def test_cold_start_after_pickup_time_is_silent(hass, aioclient_mock, freezer):
+    freezer.move_to(syn.PICKUP_TIME + timedelta(minutes=5))  # no saved memory at all
+    mock_api(aioclient_mock)  # still only booked: would be "late"
+    late = async_capture_events(hass, EVENT_CAR_NOT_ASSIGNED)
+    entry = await setup(hass)
+    await refresh(hass, entry)
+    assert late == []
+    assert hass.states.get(STATUS).state == "scheduled"

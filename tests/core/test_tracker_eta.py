@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 
 from custom_components.petra_tracker.core.eta import EtaParams, EtaSource, Leg, estimate_eta
 from custom_components.petra_tracker.core.models import Phase, parse_order, parse_order_list
 from custom_components.petra_tracker.core.tracker import (
+    EVENT_CAR_NOT_ASSIGNED,
     EVENT_ETA_CHANGED,
     EVENT_HEARTBEAT,
     EVENT_STATE_CHANGED,
@@ -182,3 +184,115 @@ def test_poll_plan():
     active = parse_order_list(syn.order_list(syn.order(combined="arriving", car_no=1, assigned=T0)))
     assert plan_next_poll(active, T0 - timedelta(hours=5), p) == p.active_interval
     assert plan_next_poll([], T0, p) == p.idle_interval
+
+
+# -- "car not assigned" warning ---------------------------------------------------
+
+def booked(now_trips=None):
+    return parse_order_list(syn.order_list(syn.order()))
+
+
+def warm_tracker(settings: TrackerSettings | None = None) -> TripTracker:
+    tracker = TripTracker(settings)
+    tracker.update([], T0 - timedelta(hours=1))  # first (silent) snapshot
+    return tracker
+
+
+def late_events(evs):
+    return [e for e in evs if e.type == EVENT_CAR_NOT_ASSIGNED]
+
+
+def test_car_not_assigned_fires_once_at_lead_time():
+    tracker = warm_tracker()
+    assert late_events(tracker.update(booked(), T0 - timedelta(minutes=2))[1]) == []
+    [ev] = late_events(tracker.update(booked(), T0 - timedelta(seconds=50))[1])
+    assert ev.data["minutes_to_pickup"] == 1 and ev.data["pickup_passed"] is False
+    assert ev.data["person_name"] == "Alex" and ev.data["raw_status"] == "booked"
+    for minutes in (0, 1, 5):
+        assert late_events(tracker.update(booked(), T0 + timedelta(minutes=minutes))[1]) == []
+
+
+def test_car_not_assigned_when_trip_first_seen_after_pickup_time():
+    tracker = warm_tracker()
+    [ev] = late_events(tracker.update(booked(), T0 + timedelta(minutes=5))[1])
+    assert ev.data["pickup_passed"] is True and ev.data["minutes_to_pickup"] == -5
+
+
+def test_car_not_assigned_lead_is_configurable_and_can_be_off():
+    tracker = warm_tracker(TrackerSettings(late_warning_lead=timedelta(minutes=10)))
+    assert late_events(tracker.update(booked(), T0 - timedelta(minutes=9))[1])
+    tracker = warm_tracker(TrackerSettings(late_warning_lead=timedelta(0)))
+    assert not late_events(tracker.update(booked(), T0 - timedelta(seconds=10))[1])
+    assert late_events(tracker.update(booked(), T0)[1])
+    tracker = warm_tracker(TrackerSettings(late_warning_lead=None))
+    assert not late_events(tracker.update(booked(), T0 + timedelta(minutes=5))[1])
+
+
+def test_no_car_not_assigned_once_car_is_assigned():
+    tracker = warm_tracker()
+    tracker.update(booked(), T0 - timedelta(minutes=5))
+    o = syn.order(combined="arriving", car_no=syn.CAR_NO, assigned=T0 - timedelta(minutes=3))
+    _, evs = tracker.update(parse_order_list(syn.order_list(o)), T0 - timedelta(seconds=30))
+    assert not late_events(evs)
+
+
+def test_cold_start_after_pickup_time_does_not_warn():
+    tracker = TripTracker()
+    assert tracker.update(booked(), T0 + timedelta(minutes=2))[1] == []  # e.g. HA (re)start
+    assert late_events(tracker.update(booked(), T0 + timedelta(minutes=3))[1]) == []
+
+
+# -- restart persistence -----------------------------------------------------------
+
+def arriving_trips():
+    o = syn.order(combined="arriving", car_no=syn.CAR_NO, assigned=ASSIGNED)
+    return parse_order_list(syn.order_list(o))
+
+
+def at_pickup_trips():
+    o = syn.order(combined="arrived", state="customer",
+                  car_no=syn.CAR_NO, assigned=ASSIGNED, events=[(3, ARRIVED)])
+    return parse_order_list(syn.order_list(o))
+
+
+def test_restored_memory_prevents_repeats_after_restart():
+    before = warm_tracker()
+    before.update(booked(), T0 - timedelta(seconds=30))  # late warning sent
+    before.update(arriving_trips(), ASSIGNED + timedelta(minutes=10))  # "approaching" sent
+    saved = json.loads(json.dumps(before.export_state(ASSIGNED + timedelta(minutes=10))))
+
+    after = TripTracker()
+    assert after.restore_state(saved, ASSIGNED + timedelta(minutes=11))
+    assert after.update(arriving_trips(), ASSIGNED + timedelta(minutes=11))[1] == []
+
+
+def test_change_during_restart_is_announced_once():
+    before = warm_tracker()
+    before.update(arriving_trips(), ASSIGNED + timedelta(minutes=1))
+    saved = before.export_state(ASSIGNED + timedelta(minutes=1))
+
+    after = TripTracker()
+    assert after.restore_state(saved, ARRIVED + timedelta(seconds=30))
+    _, evs = after.update(at_pickup_trips(), ARRIVED + timedelta(seconds=30))
+    assert [(e.data["old_status"], e.data["new_status"])
+            for e in evs if e.type == EVENT_STATE_CHANGED] == [("approaching", "at_pickup")]
+
+
+def test_stale_or_bad_saved_state_is_ignored():
+    before = warm_tracker()
+    before.update(arriving_trips(), ASSIGNED)
+    saved = before.export_state(ASSIGNED)
+    after = TripTracker()
+    assert not after.restore_state(saved, ASSIGNED + timedelta(minutes=31))
+    assert after.update(at_pickup_trips(), ASSIGNED + timedelta(minutes=31))[1] == []  # silent
+    for bad in (None, {}, {"version": 99}, {**saved, "saved_at": "nonsense"},
+                {**saved, "phase_by_trip": {"1": "teleporting"}}):
+        assert not TripTracker().restore_state(bad, ASSIGNED)
+
+
+def test_memory_only_keeps_current_trips():
+    tracker = warm_tracker()
+    tracker.update(arriving_trips(), ASSIGNED)
+    assert tracker.export_state(ASSIGNED)["phase_by_trip"] == {str(syn.BOOK_REF): "approaching"}
+    tracker.update([], ASSIGNED + timedelta(days=1))  # next day: yesterday's trip gone
+    assert tracker.export_state(ASSIGNED)["phase_by_trip"] == {}

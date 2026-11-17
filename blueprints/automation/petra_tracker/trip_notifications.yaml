@@ -1,0 +1,170 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+blueprint:
+  name: Petra Trip Tracker – trip notifications
+  description: >-
+    Push notifications and/or spoken announcements for school / service transport trips
+    tracked by the Petra Trip Tracker integration: car on its way, at pickup, picked up,
+    arrived, cancelled, no car assigned shortly before pickup, ETA updates, and problems
+    with the tracking itself.
+
+
+    It triggers only on the integration's events, which are not re-sent when Home
+    Assistant restarts, so restarts do not cause notifications.
+  domain: automation
+  source_url: https://github.com/jjpp/petra-tracker/blob/main/blueprints/automation/petra_tracker/trip_notifications.yaml
+  homeassistant:
+    min_version: "2025.1.0"
+  input:
+    notify_on:
+      name: Notify about
+      description: >-
+        "No car assigned" fires once per trip when it is still only booked shortly before
+        pickup (the lead time is an integration option, default 1 minute) or after the
+        pickup time has passed. ETA updates fire whenever the ETA changes by at least the
+        integration's ETA granularity (default 1 minute) — chatty for push, nice for speakers.
+      default:
+        - approaching
+        - at_pickup
+        - onboard
+        - finished
+        - cancelled
+        - car_not_assigned
+        - connection_degraded
+        - token_expiring
+        - schema_drift
+      selector:
+        select:
+          multiple: true
+          options:
+            - label: Car on its way
+              value: approaching
+            - label: Car at pickup
+              value: at_pickup
+            - label: Picked up
+              value: onboard
+            - label: Arrived (trip finished)
+              value: finished
+            - label: Trip cancelled
+              value: cancelled
+            - label: No car assigned shortly before / after pickup time
+              value: car_not_assigned
+            - label: ETA changed
+              value: eta_changed
+            - label: Periodic update during a trip (heartbeat, if enabled in the integration)
+              value: heartbeat
+            - label: Tracking has no connection
+              value: connection_degraded
+            - label: Login token expires soon
+              value: token_expiring
+            - label: The service's API changed
+              value: schema_drift
+    person_name:
+      name: Only for this child (optional)
+      description: >-
+        First name as shown in Home Assistant. Leave empty for all children. Account-level
+        messages (connection, token, API changes) are always sent.
+      default: ""
+      selector:
+        text:
+    notify_action:
+      name: Push notification action (optional)
+      description: >-
+        For example notify.mobile_app_my_phone. Leave empty for no push notification.
+      default: ""
+      selector:
+        text:
+    title:
+      name: Notification title
+      default: School transport
+      selector:
+        text:
+    tts_entity:
+      name: Text-to-speech engine (optional)
+      description: Leave empty for no spoken announcements.
+      default: ""
+      selector:
+        entity:
+          filter:
+            - domain: tts
+    media_players:
+      name: Speakers for announcements (optional)
+      default: []
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: media_player
+
+mode: queued
+max: 10
+
+triggers:
+  - trigger: event
+    event_type:
+      - petra_tracker_state_changed
+      - petra_tracker_car_not_assigned
+      - petra_tracker_eta_changed
+      - petra_tracker_heartbeat
+      - petra_tracker_connection_degraded
+      - petra_tracker_token_expiring
+      - petra_tracker_schema_drift
+
+variables:
+  notify_on: !input notify_on
+  person_filter: !input person_name
+  notify_action: !input notify_action
+  title: !input title
+  tts_entity: !input tts_entity
+  media_players: !input media_players
+  ev: "{{ trigger.event.data }}"
+  kind: >-
+    {% set t = trigger.event.event_type | replace('petra_tracker_', '') %}
+    {{ ev.new_status if t == 'state_changed' else t }}
+  who: "{{ ev.person_name or 'The child' }}"
+  message: >-
+    {% if kind == 'approaching' %}{{ who }}'s taxi is on its way{% if ev.eta_minutes is not none %}, about {{ ev.eta_minutes }} min{% endif %}.
+    {%- elif kind == 'at_pickup' %}{{ who }}'s taxi has arrived.
+    {%- elif kind == 'onboard' %}{{ who }} has been picked up.
+    {%- elif kind == 'finished' %}{{ who }} has arrived.
+    {%- elif kind == 'cancelled' %}{{ who }}'s trip was cancelled.
+    {%- elif kind == 'car_not_assigned' %}
+    {%- if ev.pickup_passed %}{{ who }}'s pickup time has passed and no car is assigned yet.
+    {%- else %}No car assigned yet for {{ who }}'s pickup in {{ ev.minutes_to_pickup }} min.{% endif %}
+    {%- elif kind == 'eta_changed' %}{{ who }}'s taxi: {{ ev.new_eta }} min to {{ 'pickup' if ev.leg == 'to_pickup' else 'destination' }}.
+    {%- elif kind == 'heartbeat' %}{{ who }}'s taxi: {{ ev.status | replace('_', ' ') }}{% if ev.eta_minutes is not none %}, {{ ev.eta_minutes }} min{% endif %}.
+    {%- elif kind == 'connection_degraded' %}Taxi tracking has had no connection for {{ (ev.failed_for_s / 60) | round(0) | int }} min.
+    {%- elif kind == 'token_expiring' %}Taxi tracking: the login token expires in {{ ev.days_left }} days.
+    {%- elif kind == 'schema_drift' %}Taxi tracking: the service's API changed ({{ ev.severity }}); updates may be wrong.
+    {%- endif %}
+
+conditions:
+  - condition: template
+    value_template: "{{ kind in notify_on and message | trim != '' }}"
+  # Child filter (account-level events have no person and always pass).
+  - condition: template
+    value_template: >-
+      {{ person_filter | trim == '' or ev.person_name is not defined
+         or (ev.person_name or '') | lower == person_filter | trim | lower }}
+  # New, unknown *fields* are harmless; only notify about real API problems.
+  - condition: template
+    value_template: "{{ kind != 'schema_drift' or ev.severity != 'info' }}"
+
+actions:
+  - if:
+      - condition: template
+        value_template: "{{ notify_action | trim != '' }}"
+    then:
+      - action: "{{ notify_action | trim }}"
+        data:
+          title: "{{ title }}"
+          message: "{{ message }}"
+  - if:
+      - condition: template
+        value_template: "{{ tts_entity != '' and media_players | count > 0 }}"
+    then:
+      - action: tts.speak
+        target:
+          entity_id: "{{ tts_entity }}"
+        data:
+          media_player_entity_id: "{{ media_players }}"
+          message: "{{ message }}"

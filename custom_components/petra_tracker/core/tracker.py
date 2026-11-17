@@ -17,12 +17,18 @@ from .models import ACTIVE_PHASES, TERMINAL_PHASES, Phase, Trip
 EVENT_STATE_CHANGED = "state_changed"
 EVENT_ETA_CHANGED = "eta_changed"
 EVENT_HEARTBEAT = "heartbeat"
+EVENT_CAR_NOT_ASSIGNED = "car_not_assigned"
+
+STATE_FORMAT_VERSION = 1
+DEFAULT_RESTORE_MAX_AGE = timedelta(minutes=30)
 
 
 @dataclass
 class TrackerSettings:
     eta_granularity_min: int = 1
     heartbeat_interval: timedelta | None = None  # None/0 = off
+    # Warn when a trip is still only booked this long before pickup (None = off).
+    late_warning_lead: timedelta | None = timedelta(minutes=1)
     track_onboard: bool = True
     show_finished_for: timedelta = timedelta(minutes=15)
     stale_booking_after: timedelta = timedelta(hours=3)
@@ -50,6 +56,14 @@ class _Memory:
     phase_by_trip: dict[int, Phase] = field(default_factory=dict)
     announced_eta: dict[int, int] = field(default_factory=dict)
     last_heartbeat: dict[int, datetime] = field(default_factory=dict)
+    late_warned: set[int] = field(default_factory=set)
+
+    def prune(self, keep: set[int]) -> None:
+        """Forget trips that are no longer in the API window (e.g. yesterday's)."""
+        for d in (self.phase_by_trip, self.announced_eta, self.last_heartbeat):
+            for ref in [r for r in d if r not in keep]:
+                del d[ref]
+        self.late_warned &= keep
 
 
 def select_trip(trips: list[Trip], now: datetime, s: TrackerSettings) -> Trip | None:
@@ -125,14 +139,49 @@ class TripTracker:
             )
             for t in ptrips:
                 events.extend(self._phase_events(t, persons[pid] if t is trip else None, name))
+                events.extend(self._late_events(t, name, now))
             if trip is not None:
                 events.extend(self._eta_events(trip, eta, name, now))
 
+        self._mem.prune({t.book_ref for t in trips})
         self.persons = persons
         if not self._warm:
+            # First snapshot without restored memory (fresh start, or memory too
+            # old): record what we see, announce nothing.
             self._warm = True
             return persons, []
         return persons, events
+
+    # -- persistence (so restarts neither repeat nor invent notifications) -----
+    def export_state(self, now: datetime) -> dict[str, Any]:
+        m = self._mem
+        return {
+            "version": STATE_FORMAT_VERSION,
+            "saved_at": now.isoformat(),
+            "phase_by_trip": {str(k): v.value for k, v in m.phase_by_trip.items()},
+            "announced_eta": {str(k): v for k, v in m.announced_eta.items()},
+            "late_warned": sorted(m.late_warned),
+        }
+
+    def restore_state(
+        self, data: Any, now: datetime, max_age: timedelta = DEFAULT_RESTORE_MAX_AGE
+    ) -> bool:
+        """Load memory saved by export_state. Returns False (and keeps the silent
+        first snapshot) when the data is missing, malformed or too old."""
+        try:
+            if not isinstance(data, dict) or data.get("version") != STATE_FORMAT_VERSION:
+                return False
+            saved_at = datetime.fromisoformat(data["saved_at"])
+            if not timedelta(0) <= now - saved_at <= max_age:
+                return False
+            phases = {int(k): Phase(v) for k, v in data["phase_by_trip"].items()}
+            etas = {int(k): int(v) for k, v in data["announced_eta"].items()}
+            warned = {int(r) for r in data["late_warned"]}
+        except (KeyError, TypeError, ValueError):
+            return False
+        self._mem = _Memory(phase_by_trip=phases, announced_eta=etas, late_warned=warned)
+        self._warm = True
+        return True
 
     # -- events --------------------------------------------------------------
     def _base(self, trip: Trip, name: str | None) -> dict[str, Any]:
@@ -164,6 +213,33 @@ class TripTracker:
                     "new_status": trip.phase.value,
                     "raw_status": trip.combined_status,
                     "eta_minutes": eta.minutes if eta else None,
+                },
+            )
+        ]
+
+    def _late_events(self, trip: Trip, name: str | None, now: datetime) -> list[TrackerEvent]:
+        """Once per trip: still only booked shortly before (or after) pickup time."""
+        s = self.settings
+        pickup = trip.scheduled_pickup
+        if (
+            s.late_warning_lead is None
+            or trip.phase is not Phase.SCHEDULED
+            or pickup is None
+            or trip.book_ref in self._mem.late_warned
+            or now < pickup - s.late_warning_lead
+            or now - pickup > s.stale_booking_after
+        ):
+            return []
+        self._mem.late_warned.add(trip.book_ref)
+        return [
+            TrackerEvent(
+                EVENT_CAR_NOT_ASSIGNED,
+                {
+                    **self._base(trip, name),
+                    "scheduled_pickup": pickup.isoformat(),
+                    "minutes_to_pickup": round((pickup - now).total_seconds() / 60),
+                    "pickup_passed": now >= pickup,
+                    "raw_status": trip.combined_status,
                 },
             )
         ]

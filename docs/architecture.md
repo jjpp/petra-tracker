@@ -177,7 +177,17 @@ HACS custom component `custom_components/petra_tracker`, UI config flow,
   minute changes (granularity configurable, default 1 min)
 - `petra_tracker_heartbeat` `{child, book_ref, state, eta_minutes}` — periodic "still going"
   signal while active (see §8 on how this relates to poll frequency)
+- `petra_tracker_car_not_assigned` `{child, book_ref, scheduled_pickup, minutes_to_pickup,
+  pickup_passed}` — once per trip, when it is still only booked a configurable time before pickup
+  (default 1 min) or after the pickup time
 - `petra_tracker_schema_drift`, `petra_tracker_token_expiring`
+
+**Restart safety:** the tracker's memory (last announced phase and ETA per trip, warnings sent) is
+persisted in HA storage and restored on start/reload, so events are neither repeated nor invented;
+changes that happened during a short downtime are announced once. Memory older than 30 min is
+ignored and the first snapshot is then silent. A blueprint
+(`blueprints/automation/petra_tracker/trip_notifications.yaml`) turns the events into push and/or
+TTS notifications.
 
 ### Services & Options
 Services: `set_token`, `export_telemetry`, `force_poll`, `reauth` (follow-up).

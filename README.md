@@ -71,51 +71,56 @@ Per child (device *"\<name\> transport"*):
 
 Account (device *"Petra account"*): `token_expiry`, `api_schema_status`, `api_connection`.
 
-### Events (build notifications on these)
+### Notifications (blueprint)
+
+The easiest way to get notified is the included blueprint:
+
+[![Import the blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fjjpp%2Fpetra-tracker%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fpetra_tracker%2Ftrip_notifications.yaml)
+
+(or *Settings → Automations & scenes → Blueprints → Import blueprint* with
+`https://github.com/jjpp/petra-tracker/blob/main/blueprints/automation/petra_tracker/trip_notifications.yaml`),
+then *Create automation* from it and choose:
+
+- **what to be told about**: car on its way, at pickup, picked up, arrived, cancelled,
+  **no car assigned shortly before / after the pickup time**, ETA changes, a periodic update, and
+  problems with the tracking itself (no connection, token expiring, API changed);
+- optionally **one child** (by first name);
+- a **push notification** action (e.g. `notify.mobile_app_my_phone`) and/or a **text-to-speech**
+  engine plus **speakers** for spoken announcements.
+
+The messages are in English; *Take control* of the automation to change their wording. A common
+setup is push notifications for the status changes and spoken ETA updates on a kitchen speaker
+(two automations from the same blueprint).
+
+### Events
+
+The blueprint is built on these events; use them directly for your own automations.
 
 | Event | When | Data |
 |---|---|---|
 | `petra_tracker_state_changed` | trip status changes | `person_name`, `old_status`, `new_status`, `eta_minutes`, `car_no`, … |
+| `petra_tracker_car_not_assigned` | once per trip: still only *booked* *N* minutes before pickup (default 1) or after the pickup time | `person_name`, `scheduled_pickup`, `minutes_to_pickup` (negative = late), `pickup_passed` |
 | `petra_tracker_eta_changed` | ETA changed by ≥ the configured granularity (default 1 min) | `old_eta`, `new_eta`, `leg`, `status` |
 | `petra_tracker_heartbeat` | every *N* minutes during a trip (off by default) | `status`, `eta_minutes` |
 | `petra_tracker_connection_degraded` / `_restored` | API failing for ≥ *N* minutes (default 3) / back | `failed_for_s`, `trip_active` |
 | `petra_tracker_schema_drift` | a response no longer matches the assumed contract | `severity`, `kind`, `path`, `detail` |
 | `petra_tracker_token_expiring` | daily, from 7 days before token expiry | `expires_at`, `days_left` |
 
-Example: announce changes on a speaker.
+**Restarts do not cause notifications.** The integration remembers what it has already announced
+(saved in Home Assistant's storage), so after a restart or reload nothing is announced twice; a
+change that happened *while* Home Assistant was down is announced once. If Home Assistant was off
+for more than 30 minutes, the first update after starting is silent.
 
-```yaml
-alias: Taxi announcements
-triggers:
-  - trigger: event
-    event_type: petra_tracker_state_changed
-  - trigger: event
-    event_type: petra_tracker_eta_changed
-conditions:
-  - "{{ trigger.event.data.new_status is not defined or trigger.event.data.new_status != 'scheduled' }}"
-actions:
-  - action: tts.speak
-    target:
-      entity_id: tts.piper
-    data:
-      media_player_entity_id: media_player.kitchen
-      message: >-
-        {% set e = trigger.event.data %}
-        {% if trigger.event.event_type == 'petra_tracker_eta_changed' %}
-          {{ e.person_name }}'s taxi: {{ e.new_eta }} minutes.
-        {% else %}
-          {{ {'approaching': e.person_name ~ "'s taxi is on its way",
-              'at_pickup': e.person_name ~ "'s taxi has arrived",
-              'onboard': e.person_name ~ ' has been picked up',
-              'finished': e.person_name ~ ' has arrived',
-              'cancelled': e.person_name ~ "'s trip was cancelled"}.get(e.new_status, e.new_status) }}
-        {% endif %}
-```
+If you build your own automations, trigger on these **events** rather than on the entities'
+state: state triggers also fire when an entity comes back after a restart (e.g. from
+`unavailable` to `approaching`). If you do use state triggers, add
+`not_from: [unavailable, unknown]`.
 
 ### Options
 
 Poll interval during a trip (30 s) and when idle (10 min), fast-poll lead time before a pickup
-(45 min), ETA event granularity (1 min), heartbeat (off), connection-alert delay (3 min), track the
+(45 min), ETA event granularity (1 min), heartbeat (off), "no car assigned" warning lead time
+(1 min; 0 = at pickup time), connection-alert delay (3 min), track the
 car after pickup (on), assumed speed for the straight-line ETA (25 km/h), telemetry (off) and its
 retention (30 days).
 

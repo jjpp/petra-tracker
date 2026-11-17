@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 import aiohttp
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -34,10 +36,12 @@ from .const import (
     OPT_FAILURE_ALERT_MIN,
     OPT_HEARTBEAT_MIN,
     OPT_IDLE_INTERVAL_MIN,
+    OPT_LATE_WARNING_MIN,
     OPT_LEAD_TIME_MIN,
     OPT_TELEMETRY,
     OPT_TELEMETRY_RETENTION_DAYS,
     OPT_TRACK_ONBOARD,
+    STORAGE_VERSION,
     TOKEN_WARN_DAYS,
 )
 from .core import jwt
@@ -97,7 +101,9 @@ class PetraCoordinator(DataUpdateCoordinator[PetraData]):
         self.poll_settings = PollSettings(
             active_interval=timedelta(seconds=_opt(entry, OPT_ACTIVE_INTERVAL_S)),
             idle_interval=timedelta(minutes=_opt(entry, OPT_IDLE_INTERVAL_MIN)),
-            lead_time=timedelta(minutes=_opt(entry, OPT_LEAD_TIME_MIN)),
+            lead_time=timedelta(
+                minutes=max(_opt(entry, OPT_LEAD_TIME_MIN), _opt(entry, OPT_LATE_WARNING_MIN) + 5)
+            ),
         )
         super().__init__(
             hass,
@@ -117,6 +123,7 @@ class PetraCoordinator(DataUpdateCoordinator[PetraData]):
             TrackerSettings(
                 eta_granularity_min=int(_opt(entry, OPT_ETA_GRANULARITY_MIN)),
                 heartbeat_interval=timedelta(minutes=heartbeat) if heartbeat else None,
+                late_warning_lead=timedelta(minutes=_opt(entry, OPT_LATE_WARNING_MIN)),
                 track_onboard=self.track_onboard,
                 eta_params=EtaParams(assumed_speed_kmh=float(_opt(entry, OPT_ASSUMED_SPEED_KMH))),
             )
@@ -137,6 +144,20 @@ class PetraCoordinator(DataUpdateCoordinator[PetraData]):
         self._token_warned_on: date | None = None
         self._pruned_on: date | None = None
         self._api_key_refreshed = False
+        # Tracker memory survives restarts/reloads, so events are neither repeated
+        # nor invented when Home Assistant starts.
+        self._store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}")
+
+    # -- persistence -------------------------------------------------------------
+    async def async_restore_state(self) -> None:
+        data = await self._store.async_load()
+        if data and self.tracker.restore_state(data, dt_util.utcnow()):
+            LOGGER.debug("Restored trip memory saved at %s", data.get("saved_at"))
+
+    async def async_save_state(self) -> None:
+        """Write the tracker memory now (on unload/reload)."""
+        if self.data is not None:
+            await self._store.async_save(self.tracker.export_state(self.data.updated_at))
 
     # -- helpers -----------------------------------------------------------------
     @property
@@ -245,6 +266,7 @@ class PetraCoordinator(DataUpdateCoordinator[PetraData]):
                 trip.apply_detail(det.data)
 
         persons, events = self.tracker.update(trips, now, self.known_persons)
+        self._store.async_delay_save(functools.partial(self.tracker.export_state, now), 5)
         for ev in events:
             self._fire(f"{DOMAIN}_{ev.type}", ev.data)
         self._check_token(now)

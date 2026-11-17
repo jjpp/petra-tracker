@@ -99,6 +99,7 @@ async def test_reauth_flow(hass, aioclient_mock, frozen):
     new = syn.make_token(iat=syn.DAY)
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {"token": new})
     assert result["type"] is FlowResultType.ABORT and result["reason"] == "reauth_successful"
+    await hass.async_block_till_done()  # reauth reloads the entry in the background
     assert entry.data[CONF_TOKEN] == new
 
 

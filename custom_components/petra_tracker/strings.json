@@ -40,6 +40,7 @@
           "lead_time_min": "Start fast polling this long before a scheduled pickup",
           "eta_granularity_min": "Fire ETA event when ETA changes by at least",
           "heartbeat_min": "Heartbeat event interval during a trip (0 = off)",
+          "late_warning_min": "Warn if no car is assigned this long before pickup (0 = at pickup time)",
           "failure_alert_min": "Fire connection-degraded event after failing for",
           "track_onboard": "Track the car after pickup (ETA to destination)",
           "assumed_speed_kmh": "Assumed average speed for ETA",
