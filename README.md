@@ -88,17 +88,40 @@ then *Create automation* from it and choose:
 - a **push notification** action (e.g. `notify.mobile_app_my_phone`) and/or a **text-to-speech**
   engine plus **speakers** for spoken announcements.
 
-The messages are in English; *Take control* of the automation to change their wording. A common
-setup is push notifications for the status changes and spoken ETA updates on a kitchen speaker
-(two automations from the same blueprint).
+A common setup is push notifications for the status changes and spoken ETA updates on a kitchen
+speaker (two automations from the same blueprint).
+
+**Message texts** are adjustable in the automation's *Message texts* section (defaults are in
+English). Placeholders are replaced with the trip's details, also in the title:
+
+| Placeholder | Value |
+|---|---|
+| `{child}` | first name |
+| `{eta}` / `{old_eta}` | minutes to the next stop / previous ETA |
+| `{leg}` | `pickup` or `destination` |
+| `{status}` | trip status in words (`on its way`, `at pickup`, `on board`, …) |
+| `{car}` | car number |
+| `{pickup_time}` | scheduled pickup time, `HH:MM` in Home Assistant's time zone |
+| `{minutes}` | minutes before / after the pickup time ("no car assigned" messages) |
+| `{failed_minutes}`, `{days}`, `{severity}` | connection outage, token expiry, API change |
+
+A placeholder without a value becomes `?`. Empty a text to never send that message.
+
+**Updating the blueprint:** *Settings → Automations & scenes → Blueprints →* ⋮ next to
+*Petra Trip Tracker – trip notifications* *→ Re-import blueprint*. Automations created from it use
+the new version right away; your chosen options and texts are kept (new options get their
+defaults). Automations where you used *Take control* are independent copies and are not updated.
+The Marketplace updates the integration, not the blueprint, so re-import it after releases that
+mention blueprint changes.
 
 ### Events
 
-The blueprint is built on these events; use them directly for your own automations.
+The blueprint is built on these events; use them directly for your own automations. All trip
+events include `person_name`, `book_ref`, `car_no` and `scheduled_pickup`.
 
 | Event | When | Data |
 |---|---|---|
-| `petra_tracker_state_changed` | trip status changes | `person_name`, `old_status`, `new_status`, `eta_minutes`, `car_no`, … |
+| `petra_tracker_state_changed` | trip status changes | `person_name`, `old_status`, `new_status`, `eta_minutes`, `car_no`, `scheduled_pickup`, … |
 | `petra_tracker_car_not_assigned` | once per trip: still only *booked* *N* minutes before pickup (default 1) or after the pickup time | `person_name`, `scheduled_pickup`, `minutes_to_pickup` (negative = late), `pickup_passed` |
 | `petra_tracker_eta_changed` | ETA changed by ≥ the configured granularity (default 1 min) | `old_eta`, `new_eta`, `leg`, `status` |
 | `petra_tracker_heartbeat` | every *N* minutes during a trip (off by default) | `status`, `eta_minutes` |

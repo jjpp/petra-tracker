@@ -190,6 +190,7 @@ class TripTracker:
             "person_name": name,
             "book_ref": trip.book_ref,
             "car_no": trip.car_no,
+            "scheduled_pickup": trip.scheduled_pickup.isoformat() if trip.scheduled_pickup else None,
         }
 
     def _phase_events(
@@ -236,7 +237,6 @@ class TripTracker:
                 EVENT_CAR_NOT_ASSIGNED,
                 {
                     **self._base(trip, name),
-                    "scheduled_pickup": pickup.isoformat(),
                     "minutes_to_pickup": round((pickup - now).total_seconds() / 60),
                     "pickup_passed": now >= pickup,
                     "raw_status": trip.combined_status,

@@ -75,6 +75,7 @@ blueprint:
         text:
     title:
       name: Notification title
+      description: 'Placeholders work here too, e.g. "{child}: school transport".'
       default: School transport
       selector:
         text:
@@ -94,6 +95,79 @@ blueprint:
           multiple: true
           filter:
             - domain: media_player
+    messages:
+      name: Message texts
+      icon: mdi:message-text-outline
+      collapsed: true
+      description: >-
+        The text of each message. Placeholders are replaced with the trip's details
+        (also in the notification title): {child} first name, {eta} minutes to the next
+        stop, {old_eta} previous ETA, {leg} "pickup" or "destination", {status} trip status
+        in words, {car} car number, {pickup_time} scheduled pickup time (HH:MM),
+        {minutes} minutes before/after the pickup time, {failed_minutes} minutes without
+        connection, {days} days until the token expires, {severity} kind of API change.
+        A placeholder without a value becomes "?". Empty a text to never send that message.
+      input:
+        msg_approaching:
+          name: Car on its way
+          default: "{child}'s taxi is on its way, about {eta} min."
+          selector:
+            text:
+        msg_at_pickup:
+          name: Car at pickup
+          default: "{child}'s taxi has arrived."
+          selector:
+            text:
+        msg_onboard:
+          name: Picked up
+          default: "{child} has been picked up."
+          selector:
+            text:
+        msg_finished:
+          name: Arrived
+          default: "{child} has arrived."
+          selector:
+            text:
+        msg_cancelled:
+          name: Trip cancelled
+          default: "{child}'s trip was cancelled."
+          selector:
+            text:
+        msg_car_not_assigned:
+          name: No car assigned shortly before pickup
+          default: "No car assigned yet for {child}'s pickup in {minutes} min."
+          selector:
+            text:
+        msg_car_not_assigned_late:
+          name: Pickup time passed, no car assigned
+          default: "{child}'s pickup time {pickup_time} has passed and no car is assigned yet."
+          selector:
+            text:
+        msg_eta_changed:
+          name: ETA changed
+          default: "{child}'s taxi: {eta} min to {leg}."
+          selector:
+            text:
+        msg_heartbeat:
+          name: Periodic update
+          default: "{child}'s taxi: {status}, {eta} min."
+          selector:
+            text:
+        msg_connection_degraded:
+          name: Tracking has no connection
+          default: "Taxi tracking has had no connection for {failed_minutes} min."
+          selector:
+            text:
+        msg_token_expiring:
+          name: Login token expires soon
+          default: "Taxi tracking: the login token expires in {days} days."
+          selector:
+            text:
+        msg_schema_drift:
+          name: The service's API changed
+          default: "Taxi tracking: the service's API changed ({severity}); updates may be wrong."
+          selector:
+            text:
 
 mode: queued
 max: 10
@@ -120,22 +194,52 @@ variables:
   kind: >-
     {% set t = trigger.event.event_type | replace('petra_tracker_', '') %}
     {{ ev.new_status if t == 'state_changed' else t }}
-  who: "{{ ev.person_name or 'The child' }}"
+  who: "{{ ev.get('person_name') or 'The child' }}"
+  texts:
+    approaching: !input msg_approaching
+    at_pickup: !input msg_at_pickup
+    onboard: !input msg_onboard
+    finished: !input msg_finished
+    cancelled: !input msg_cancelled
+    car_not_assigned: !input msg_car_not_assigned
+    car_not_assigned_late: !input msg_car_not_assigned_late
+    eta_changed: !input msg_eta_changed
+    heartbeat: !input msg_heartbeat
+    connection_degraded: !input msg_connection_degraded
+    token_expiring: !input msg_token_expiring
+    schema_drift: !input msg_schema_drift
+  text_key: >-
+    {{ 'car_not_assigned_late' if kind == 'car_not_assigned' and ev.get('pickup_passed') else kind }}
+  # Each placeholder's value; missing values become "?".
+  placeholders:
+    "{child}": "{{ who }}"
+    "{eta}": >-
+      {% set eta = ev.get('new_eta') if kind == 'eta_changed' else ev.get('eta_minutes') %}
+      {{ '?' if eta is none else eta }}
+    "{old_eta}": "{{ ev.get('old_eta', '?') }}"
+    "{leg}": "{{ 'pickup' if ev.get('leg') == 'to_pickup' else 'destination' if ev.get('leg') else '?' }}"
+    "{status}": >-
+      {% set s = ev.get('status') or ev.get('new_status') %}
+      {{ {'scheduled': 'scheduled', 'approaching': 'on its way', 'at_pickup': 'at pickup',
+          'onboard': 'on board', 'finished': 'arrived', 'cancelled': 'cancelled'}.get(s, s or '?') }}
+    "{car}": "{{ ev.get('car_no') or '?' }}"
+    "{pickup_time}": >-
+      {% set p = as_datetime(ev.get('scheduled_pickup')) if ev.get('scheduled_pickup') else none %}
+      {{ as_local(p).strftime('%H:%M') if p else '?' }}
+    "{minutes}": >-
+      {{ (ev.get('minutes_to_pickup') | abs) if ev.get('minutes_to_pickup') is not none else '?' }}
+    "{failed_minutes}": >-
+      {{ ((ev.get('failed_for_s') / 60) | round(0) | int) if ev.get('failed_for_s') is not none else '?' }}
+    "{days}": "{{ ev.get('days_left', '?') }}"
+    "{severity}": "{{ ev.get('severity', '?') }}"
   message: >-
-    {% if kind == 'approaching' %}{{ who }}'s taxi is on its way{% if ev.eta_minutes is not none %}, about {{ ev.eta_minutes }} min{% endif %}.
-    {%- elif kind == 'at_pickup' %}{{ who }}'s taxi has arrived.
-    {%- elif kind == 'onboard' %}{{ who }} has been picked up.
-    {%- elif kind == 'finished' %}{{ who }} has arrived.
-    {%- elif kind == 'cancelled' %}{{ who }}'s trip was cancelled.
-    {%- elif kind == 'car_not_assigned' %}
-    {%- if ev.pickup_passed %}{{ who }}'s pickup time has passed and no car is assigned yet.
-    {%- else %}No car assigned yet for {{ who }}'s pickup in {{ ev.minutes_to_pickup }} min.{% endif %}
-    {%- elif kind == 'eta_changed' %}{{ who }}'s taxi: {{ ev.new_eta }} min to {{ 'pickup' if ev.leg == 'to_pickup' else 'destination' }}.
-    {%- elif kind == 'heartbeat' %}{{ who }}'s taxi: {{ ev.status | replace('_', ' ') }}{% if ev.eta_minutes is not none %}, {{ ev.eta_minutes }} min{% endif %}.
-    {%- elif kind == 'connection_degraded' %}Taxi tracking has had no connection for {{ (ev.failed_for_s / 60) | round(0) | int }} min.
-    {%- elif kind == 'token_expiring' %}Taxi tracking: the login token expires in {{ ev.days_left }} days.
-    {%- elif kind == 'schema_drift' %}Taxi tracking: the service's API changed ({{ ev.severity }}); updates may be wrong.
-    {%- endif %}
+    {%- set ns = namespace(text=texts.get(text_key) or '') -%}
+    {%- for k, v in placeholders.items() %}{% set ns.text = ns.text | replace(k, v | string) %}{% endfor -%}
+    {{ ns.text }}
+  notify_title: >-
+    {%- set ns = namespace(text=title or '') -%}
+    {%- for k, v in placeholders.items() %}{% set ns.text = ns.text | replace(k, v | string) %}{% endfor -%}
+    {{ ns.text }}
 
 conditions:
   - condition: template
@@ -156,7 +260,7 @@ actions:
     then:
       - action: "{{ notify_action | trim }}"
         data:
-          title: "{{ title }}"
+          title: "{{ notify_title }}"
           message: "{{ message }}"
   - if:
       - condition: template

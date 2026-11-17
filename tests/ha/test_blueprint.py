@@ -21,6 +21,7 @@ async def setup_blueprint(hass: HomeAssistant, tmp_path):
     target = tmp_path / "blueprints" / "automation" / "petra_tracker"
     target.mkdir(parents=True)
     shutil.copy(BLUEPRINT, target)
+    await hass.config.async_set_time_zone("Europe/Stockholm")
     notify = async_mock_service(hass, "notify", "test_phone")
     tts = async_mock_service(hass, "tts", "speak")
 
@@ -48,9 +49,12 @@ async def fire(hass: HomeAssistant, event_type: str, **data):
     await hass.async_block_till_done()
 
 
+PICKUP = "2030-01-15T06:50:00+00:00"  # 07:50 in Europe/Stockholm
+
+
 def state(new, old="scheduled", **extra):
     return {"person_name": "Alex", "old_status": old, "new_status": new, "eta_minutes": None,
-            "car_no": 42, "book_ref": 1, **extra}
+            "car_no": 42, "book_ref": 1, "scheduled_pickup": PICKUP, **extra}
 
 
 async def test_state_changes_are_notified(hass, setup_blueprint):
@@ -70,11 +74,13 @@ async def test_state_changes_are_notified(hass, setup_blueprint):
 
 async def test_car_not_assigned_messages(hass, setup_blueprint):
     notify, _ = await setup_blueprint()
-    await fire(hass, "car_not_assigned", person_name="Alex", minutes_to_pickup=1, pickup_passed=False)
-    await fire(hass, "car_not_assigned", person_name="Alex", minutes_to_pickup=-4, pickup_passed=True)
+    await fire(hass, "car_not_assigned", person_name="Alex", minutes_to_pickup=1,
+               pickup_passed=False, scheduled_pickup=PICKUP)
+    await fire(hass, "car_not_assigned", person_name="Alex", minutes_to_pickup=-4,
+               pickup_passed=True, scheduled_pickup=PICKUP)
     assert [c.data["message"] for c in notify] == [
         "No car assigned yet for Alex's pickup in 1 min.",
-        "Alex's pickup time has passed and no car is assigned yet.",
+        "Alex's pickup time 07:50 has passed and no car is assigned yet.",
     ]
 
 
@@ -87,7 +93,7 @@ async def test_selection_child_filter_and_account_events(hass, setup_blueprint):
     await fire(hass, "schema_drift", severity="info", kind="unknown_field", path="$.x", detail="")
     await fire(hass, "schema_drift", severity="warning", kind="enum", path="$.y", detail="")
     assert [c.data["message"] for c in notify] == [
-        "SAM's taxi is on its way.",
+        "SAM's taxi is on its way, about ? min.",
         "Taxi tracking has had no connection for 3 min.",
         "Taxi tracking: the service's API changed (warning); updates may be wrong.",
     ]
@@ -107,3 +113,38 @@ async def test_eta_updates_spoken_only(hass, setup_blueprint):
     assert call.data["message"] == "Alex's taxi: 4 min to pickup."
     assert call.data["media_player_entity_id"] == ["media_player.kitchen", "media_player.hall"]
     assert call.data["entity_id"] == ["tts.example"]
+
+
+async def test_custom_texts_with_placeholders(hass, setup_blueprint):
+    notify, _ = await setup_blueprint(
+        title="{child}: taxi",
+        msg_approaching="Taxi {car} for {child} ({pickup_time}) arrives in {eta} min",
+        msg_car_not_assigned_late="{child}: {minutes} min late, {status}, unknown {old_eta}",
+        notify_on=["approaching", "car_not_assigned", "heartbeat"],
+        msg_heartbeat="",  # empty text: never sent
+    )
+    await fire(hass, "state_changed", **state("approaching", eta_minutes=6))
+    await fire(hass, "car_not_assigned", person_name="Alex", minutes_to_pickup=-12,
+               pickup_passed=True, scheduled_pickup=PICKUP, car_no=None)
+    await fire(hass, "heartbeat", person_name="Alex", status="approaching", eta_minutes=3)
+    assert [(c.data["title"], c.data["message"]) for c in notify] == [
+        ("Alex: taxi", "Taxi 42 for Alex (07:50) arrives in 6 min"),
+        ("Alex: taxi", "Alex: 12 min late, ?, unknown ?"),
+    ]
+
+
+async def test_heartbeat_status_in_words(hass, setup_blueprint):
+    notify, _ = await setup_blueprint(notify_on=["heartbeat"])
+    await fire(hass, "heartbeat", person_name="Alex", status="onboard", eta_minutes=8,
+               leg="to_destination", scheduled_pickup=PICKUP)
+    assert notify[0].data["message"] == "Alex's taxi: on board, 8 min."
+
+
+async def test_account_messages_use_their_placeholders(hass, setup_blueprint):
+    notify, _ = await setup_blueprint(title="Taxi tracking")
+    await fire(hass, "token_expiring", expires_at="2030-01-20T00:00:00+00:00", days_left=5)
+    await fire(hass, "connection_degraded", failed_for_s=600, trip_active=False)
+    assert [(c.data["title"], c.data["message"]) for c in notify] == [
+        ("Taxi tracking", "Taxi tracking: the login token expires in 5 days."),
+        ("Taxi tracking", "Taxi tracking has had no connection for 10 min."),
+    ]

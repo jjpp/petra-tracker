@@ -296,3 +296,10 @@ def test_memory_only_keeps_current_trips():
     assert tracker.export_state(ASSIGNED)["phase_by_trip"] == {str(syn.BOOK_REF): "approaching"}
     tracker.update([], ASSIGNED + timedelta(days=1))  # next day: yesterday's trip gone
     assert tracker.export_state(ASSIGNED)["phase_by_trip"] == {}
+
+
+def test_all_trip_events_carry_scheduled_pickup():
+    _, events = run_timeline(TrackerSettings(heartbeat_interval=timedelta(minutes=2)))
+    assert events
+    for _, e in events:
+        assert e.data["scheduled_pickup"] == syn.PICKUP_TIME.isoformat()
