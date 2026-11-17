@@ -34,8 +34,15 @@ Contents:
 
 ### Install
 
-HACS → *Custom repositories* → add `https://github.com/jjpp/petra-tracker` as an *Integration*, install, restart.
-Or copy `custom_components/petra_tracker` into your HA `config/custom_components/`.
+- **Home Assistant 2026.11 or newer:** *Settings → Marketplace → Add from link* →
+  `https://github.com/jjpp/petra-tracker` → *Add*, then open it and install. (Adding a repository
+  from a link asks you to connect GitHub once.)
+- **Older Home Assistant with HACS:** HACS → *Custom repositories* → add
+  `https://github.com/jjpp/petra-tracker` as an *Integration*, install, restart.
+- **Manually:** copy `custom_components/petra_tracker` into your HA `config/custom_components/`
+  and restart.
+
+Then add it under *Settings → Devices & services*.
 
 ### Set up
 
