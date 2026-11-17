@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "description": "Assumed shape of the Petra GlobalApi responses used by petra-tracker. Both the Home Assistant integration and the Android app validate against this contract. Derived from observation; the API is undocumented.",
+  "operator_config_url": "https://store.frogne.com/srv/ftp/petra-configs/petra_cab_prod_config_{country}.json",
+  "endpoints": {
+    "order_list": "GET {base}users/{user_id}/persons/orders?fromDate&toDate&itemsPerPage&index&sortOder=ASC&grouping=true",
+    "order_detail": "GET {base}orders/{book_ref}"
+  },
+  "enums": {
+    "combinedStatus": ["booked", "arriving", "arrived", "personIn", "concluded", "completed", "deleted", "cancelled"],
+    "state": ["booked", "arriving", "arrived", "customer", "concluded", "completed", "deleted", "cancelled"],
+    "personEventType": [0, 1, 3]
+  },
+  "objects": {
+    "operatorConfig": {
+      "required": {"configs": "object"},
+      "optional": {}
+    },
+    "operatorConfigBody": {
+      "required": {"globalApiUrl": "string", "globalApiKey": "string"},
+      "optional": {"linkToTermsOfService": "string", "linkToPrivacy": "string", "linkToGdprCompliance": "string", "appMinVersion": "string"}
+    },
+    "orderList": {
+      "required": {"count": "int", "items": "array"},
+      "optional": {}
+    },
+    "order": {
+      "required": {
+        "bookRefNo": "int",
+        "pickUpDateTime": "string",
+        "personID": "int",
+        "combinedStatus": "string",
+        "status": "object",
+        "addresses": "array"
+      },
+      "optional": {
+        "bookSeqNo": "int", "companyNo": "int", "createdDateTime": "string", "operator": "string",
+        "scheduleID": "int", "firstName": "string", "lastName": "string", "phone": "string",
+        "email": "string", "customerRefNo": "string", "projectID": "string", "fixedPrice": "number",
+        "comment": "string", "fixedCar": "int", "coordinable": "bool", "urgent": "bool",
+        "manual": "bool", "account": "int", "fixedDriver": "int", "productID": "int",
+        "agreementID": "int", "dropOffTimeDateTime": "string|null", "coordinatedBookRefnr": "int|null",
+        "coordinatedPosition": "int|null", "attributes": "array", "persons": "array|null",
+        "permissions": "array", "metaData": "object", "Car": "array",
+        "editTime": "string|null", "editOperator": "string|null", "commentOperator": "string|null",
+        "externalCodesString": "string|null"
+      }
+    },
+    "status": {
+      "required": {"state": "string"},
+      "optional": {
+        "provider": "any", "carNo": "int|null", "driverNo": "int|null", "operator": "string|null",
+        "timeStamp": "string|null", "price": "number|null", "tripAssigned": "string|null",
+        "tripStarted": "string|null", "tripEnded": "string|null", "commentTrip": "string|null",
+        "noshowTimeStamp": "string|null", "noshowOperatorId": "string|null",
+        "createdByUserId": "any", "gpsPositions": "array"
+      }
+    },
+    "address": {
+      "required": {"type": "string", "coordinates": "object"},
+      "optional": {
+        "streetID": "int", "houseNo": "int", "houseLetter": "string", "floor": "string",
+        "door": "string", "pOIId": "int", "comment": "string", "district": "int",
+        "pOIName": "string", "poiname": "string", "streetName": "string", "city": "string",
+        "zipCode": "string", "countryCode": "string", "fullAddress": "string"
+      }
+    },
+    "scaledCoordinates": {
+      "required": {"x": "int", "y": "int"},
+      "optional": {}
+    },
+    "gpsPosition": {
+      "required": {"timeStamp": "string", "x": "number", "y": "number"},
+      "optional": {}
+    },
+    "personEvent": {
+      "required": {"type": "int", "timeStamp": "string"},
+      "optional": {"tripRefID": "int", "personIndex": "int"}
+    }
+  },
+  "notes": {
+    "coordinates": "addresses[].coordinates are integers scaled by 1e7 (x=lon, y=lat); status.gpsPositions are plain decimal degrees (x=lon, y=lat).",
+    "detail_vs_list": "Only the order_detail response carries status.gpsPositions; only the order_list response carries persons[] events.",
+    "personEventType": "3 = car arrived at pickup, 0 = passenger picked up, 1 = passenger dropped off."
+  }
+}

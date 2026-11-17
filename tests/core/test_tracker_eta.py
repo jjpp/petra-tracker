@@ -1,0 +1,184 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+from datetime import timedelta
+
+from custom_components.petra_tracker.core.eta import EtaParams, EtaSource, Leg, estimate_eta
+from custom_components.petra_tracker.core.models import Phase, parse_order, parse_order_list
+from custom_components.petra_tracker.core.tracker import (
+    EVENT_ETA_CHANGED,
+    EVENT_HEARTBEAT,
+    EVENT_STATE_CHANGED,
+    PollSettings,
+    TrackerSettings,
+    TripTracker,
+    plan_next_poll,
+    trips_needing_detail,
+)
+
+from .. import synthetic as syn
+
+T0 = syn.PICKUP_TIME
+ASSIGNED = T0 - timedelta(minutes=9)
+ARRIVED = T0 + timedelta(minutes=1)
+STARTED = T0 + timedelta(minutes=2)
+ENDED = T0 + timedelta(minutes=12)
+
+
+def trip_with_gps(order, gps):
+    trip = parse_order(order)
+    trip.apply_detail(syn.detail(order, gps))
+    return trip
+
+
+def test_eta_schedule_before_car_assigned():
+    trip = parse_order(syn.order())
+    eta = estimate_eta(trip, T0 - timedelta(minutes=30), EtaParams())
+    assert (eta.minutes, eta.source, eta.leg) == (30, EtaSource.SCHEDULE, Leg.TO_PICKUP)
+
+
+def test_eta_from_gps_decreases_and_hits_zero():
+    o = syn.order(combined="arriving", car_no=syn.CAR_NO, assigned=ASSIGNED)
+    track = syn.approach_track(ASSIGNED, 8)
+    params = EtaParams(assumed_speed_kmh=25, road_factor=1.4)
+    far = trip_with_gps(o, track[:1])
+    near = trip_with_gps(o, track[:-2])
+    there = trip_with_gps(o, track)
+    e_far = estimate_eta(far, ASSIGNED, params)
+    e_near = estimate_eta(near, ASSIGNED + timedelta(minutes=7), params)
+    assert e_far.source is EtaSource.GPS and 6 <= e_far.minutes <= 8  # 2 km * 1.4 @ 25 km/h
+    assert e_near.minutes < e_far.minutes
+    assert estimate_eta(there, ASSIGNED + timedelta(minutes=8), params).source is EtaSource.ARRIVED
+
+
+def test_eta_onboard_targets_destination_and_can_be_disabled():
+    o = syn.order(combined="personIn", state="customer", car_no=syn.CAR_NO,
+                  assigned=ASSIGNED, started=STARTED)
+    trip = trip_with_gps(o, [(STARTED, *syn.PICKUP)])
+    eta = estimate_eta(trip, STARTED, EtaParams())
+    assert eta.leg is Leg.TO_DESTINATION and eta.minutes > 0
+    assert estimate_eta(trip, STARTED, EtaParams(), track_onboard=False) is None
+
+
+def test_pooled_trip_is_marked_approximate():
+    o = syn.order(combined="arriving", car_no=syn.CAR_NO, assigned=ASSIGNED, coordinated_position=2)
+    trip = trip_with_gps(o, syn.approach_track(ASSIGNED, 4)[:1])
+    assert estimate_eta(trip, ASSIGNED, EtaParams()).approximate
+
+
+def run_timeline(settings: TrackerSettings):
+    """Replays a whole trip like the real capture: booked -> arriving -> arrived
+    -> personIn -> concluded, polling every 30 s."""
+    tracker = TripTracker(settings)
+    track = syn.approach_track(ASSIGNED, 10)  # arrives at T0 + 1 min
+    events = []
+    now = ASSIGNED - timedelta(minutes=5)
+    while now <= ENDED + timedelta(minutes=5):
+        if now < ASSIGNED:
+            o = syn.order()
+            gps = None
+        elif now < ARRIVED:
+            o = syn.order(combined="arriving", car_no=syn.CAR_NO, assigned=ASSIGNED)
+            gps = [g for g in track if g[0] <= now]
+        elif now < STARTED:
+            o = syn.order(combined="arrived", state="customer", car_no=syn.CAR_NO,
+                          assigned=ASSIGNED, events=[(3, ARRIVED)])
+            gps = track
+        elif now < ENDED:
+            o = syn.order(combined="personIn", state="customer", car_no=syn.CAR_NO,
+                          assigned=ASSIGNED, started=STARTED, events=[(3, ARRIVED), (0, STARTED)])
+            gps = track + [(now, syn.PICKUP[0], syn.PICKUP[1] + 0.02 * (now - STARTED) / (ENDED - STARTED))]
+        else:
+            o = syn.order(combined="concluded", car_no=syn.CAR_NO, assigned=ASSIGNED,
+                          started=STARTED, ended=ENDED,
+                          events=[(3, ARRIVED), (0, STARTED), (1, ENDED)])
+            gps = None
+        trips = parse_order_list(syn.order_list(o))
+        for t in trips_needing_detail(trips, settings.track_onboard):
+            t.apply_detail(syn.detail(o, gps or []))
+        persons, evs = tracker.update(trips, now)
+        events.extend((now, e) for e in evs)
+        now += timedelta(seconds=30)
+    return tracker, events
+
+
+def test_full_trip_state_events():
+    _, events = run_timeline(TrackerSettings())
+    transitions = [(e.data["old_status"], e.data["new_status"])
+                   for _, e in events if e.type == EVENT_STATE_CHANGED]
+    assert transitions == [
+        ("scheduled", "approaching"),
+        ("approaching", "at_pickup"),
+        ("at_pickup", "onboard"),
+        ("onboard", "finished"),
+    ]
+    first = next(e for _, e in events if e.type == EVENT_STATE_CHANGED)
+    assert first.data["person_name"] == "Alex" and first.data["car_no"] == syn.CAR_NO
+
+
+def test_eta_events_respect_granularity():
+    _, fine = run_timeline(TrackerSettings(eta_granularity_min=1))
+    _, coarse = run_timeline(TrackerSettings(eta_granularity_min=3))
+    n_fine = sum(1 for _, e in fine if e.type == EVENT_ETA_CHANGED)
+    n_coarse = sum(1 for _, e in coarse if e.type == EVENT_ETA_CHANGED)
+    assert n_fine > n_coarse > 0
+    for _, e in coarse:
+        if e.type == EVENT_ETA_CHANGED:
+            assert abs(e.data["new_eta"] - e.data["old_eta"]) >= 3
+
+
+def test_heartbeat_off_by_default_and_periodic_when_enabled():
+    _, off = run_timeline(TrackerSettings())
+    assert not any(e.type == EVENT_HEARTBEAT for _, e in off)
+    _, on = run_timeline(TrackerSettings(heartbeat_interval=timedelta(minutes=2)))
+    times = [t for t, e in on if e.type == EVENT_HEARTBEAT]
+    assert len(times) >= 5
+    assert all(b - a >= timedelta(minutes=2) for a, b in zip(times, times[1:], strict=False))
+
+
+def test_no_events_on_first_snapshot_mid_trip():
+    tracker = TripTracker()
+    o = syn.order(combined="arriving", car_no=syn.CAR_NO, assigned=ASSIGNED)
+    _, evs = tracker.update(parse_order_list(syn.order_list(o)), ASSIGNED)
+    assert evs == []  # e.g. HA restarted during a trip: do not re-announce
+
+
+def test_trip_first_seen_in_motion_is_announced_after_warmup():
+    tracker = TripTracker()
+    tracker.update([], ASSIGNED - timedelta(minutes=1))  # warm-up, nothing today yet
+    o = syn.order(combined="arriving", car_no=syn.CAR_NO, assigned=ASSIGNED)
+    _, evs = tracker.update(parse_order_list(syn.order_list(o)), ASSIGNED)
+    assert [(e.data["old_status"], e.data["new_status"]) for e in evs if e.type == EVENT_STATE_CHANGED] == [
+        (None, "approaching")
+    ]
+
+
+def test_selection_prefers_active_then_recent_then_next():
+    morning = syn.order(combined="concluded", book_ref=1, car_no=1, assigned=T0, ended=ENDED)
+    afternoon = syn.order(book_ref=2, pickup_time=T0 + timedelta(hours=7),
+                          dropoff_time=T0 + timedelta(hours=7, minutes=15))
+    trips = parse_order_list(syn.order_list(morning, afternoon))
+    tracker = TripTracker()
+    persons, _ = tracker.update(trips, ENDED + timedelta(minutes=5))
+    assert persons[syn.PERSON_ID].trip.book_ref == 1  # just finished: still shown
+    persons, _ = tracker.update(trips, ENDED + timedelta(minutes=30))
+    p = persons[syn.PERSON_ID]
+    assert p.trip.book_ref == 2 and p.phase is Phase.SCHEDULED
+    assert p.next_pickup == T0 + timedelta(hours=7)
+
+
+def test_known_persons_without_trips_are_idle():
+    persons, _ = TripTracker().update([], T0, known_persons={77: "Sam"})
+    assert persons[77].phase is None and persons[77].name == "Sam"
+
+
+def test_poll_plan():
+    p = PollSettings()
+    booked = parse_order_list(syn.order_list(syn.order()))
+    assert plan_next_poll(booked, T0 - timedelta(hours=3), p) == p.idle_interval
+    assert plan_next_poll(booked, T0 - timedelta(minutes=50), p) == timedelta(minutes=5)
+    assert plan_next_poll(booked, T0 - timedelta(minutes=30), p) == p.active_interval
+    assert plan_next_poll(booked, T0 + timedelta(minutes=20), p) == p.active_interval  # car late
+    active = parse_order_list(syn.order_list(syn.order(combined="arriving", car_no=1, assigned=T0)))
+    assert plan_next_poll(active, T0 - timedelta(hours=5), p) == p.active_interval
+    assert plan_next_poll([], T0, p) == p.idle_interval

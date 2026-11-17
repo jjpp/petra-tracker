@@ -1,0 +1,96 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Petra trip tracker",
+        "description": "Unofficial integration for school/service transport trips booked through the Petra platform (e.g. Cabonline Serviceresor / Skoltransport).\n\nPaste your login token (JWT). For now you can copy it from the web client: open the browser developer tools, look at a request to the API and copy the value after `Authorization: JWT`. Tokens are valid for about 30 days; you will be asked for a new one when it expires.",
+        "data": {
+          "country": "Operator country",
+          "token": "Token (JWT)"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Token expired",
+        "description": "The Petra token was rejected or has expired. Paste a new token for the same account.",
+        "data": {
+          "token": "Token (JWT)"
+        }
+      }
+    },
+    "error": {
+      "invalid_token": "This does not look like a valid token (JWT).",
+      "token_expired": "This token has already expired.",
+      "wrong_user": "This token belongs to a different account.",
+      "invalid_auth": "The server rejected the token.",
+      "operator_config": "The operator configuration could not be used (API key rejected).",
+      "cannot_connect": "Could not connect to the Petra service."
+    },
+    "abort": {
+      "already_configured": "This account is already configured.",
+      "reauth_successful": "Token updated."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Polling and notifications",
+        "data": {
+          "active_interval_s": "Poll interval during a trip",
+          "idle_interval_min": "Poll interval when no trip is near",
+          "lead_time_min": "Start fast polling this long before a scheduled pickup",
+          "eta_granularity_min": "Fire ETA event when ETA changes by at least",
+          "heartbeat_min": "Heartbeat event interval during a trip (0 = off)",
+          "failure_alert_min": "Fire connection-degraded event after failing for",
+          "track_onboard": "Track the car after pickup (ETA to destination)",
+          "assumed_speed_kmh": "Assumed average speed for ETA",
+          "telemetry": "Store redacted API responses locally (for analysis)",
+          "telemetry_retention_days": "Keep telemetry for"
+        }
+      }
+    }
+  },
+  "selector": {
+    "country": {
+      "options": {
+        "se": "Sweden",
+        "no": "Norway"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "trip_status": {
+        "name": "Trip status",
+        "state": {
+          "idle": "No trip",
+          "scheduled": "Scheduled",
+          "approaching": "Car on its way",
+          "at_pickup": "Car at pickup",
+          "onboard": "On board",
+          "finished": "Finished",
+          "cancelled": "Cancelled",
+          "unknown": "Unknown"
+        }
+      },
+      "eta": { "name": "ETA" },
+      "next_pickup": { "name": "Next pickup" },
+      "token_expiry": { "name": "Token expiry" },
+      "schema_status": {
+        "name": "API schema status",
+        "state": {
+          "ok": "OK",
+          "info": "New fields",
+          "warning": "Unexpected values",
+          "breaking": "Incompatible change"
+        }
+      }
+    },
+    "binary_sensor": {
+      "trip_active": { "name": "Trip active" },
+      "connection": { "name": "API connection" }
+    },
+    "device_tracker": {
+      "car": { "name": "Car" }
+    }
+  }
+}

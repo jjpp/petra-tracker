@@ -1,0 +1,161 @@
+# Petra Trip Tracker
+
+Track school / service transport trips booked through the **Petra** platform (Finn Frogne A/S),
+as used by e.g. *Cabonline Serviceresor / Skoltransport* (Sweden) and *Skoleturer* (Norway).
+
+The official app shows little more than a status and does not refresh on its own. This project
+polls the same backend, follows the trip as it happens and makes it available for automations:
+status, **ETA in minutes**, and the **car's live position**.
+
+> **Unofficial.** Not affiliated with Cabonline or Finn Frogne. It uses an undocumented API with
+> your own account, for personal use. The API can change at any time; the integration validates
+> every response and tells you when it changed (see *Schema watchdog*).
+
+Contents:
+
+- `custom_components/petra_tracker/` — Home Assistant integration (HACS-compatible)
+- `custom_components/petra_tracker/core/` — HA-independent core (API client, parsing, ETA, schema guard)
+- `contract/` — the assumed API contract, shared with the (planned) Android app
+- `docs/architecture.md` — design
+- `android/` — planned standalone app (not started)
+
+## Status
+
+| Phase | What | State |
+|---|---|---|
+| 1 | Core: client, schema guard, ETA (straight-line), tracker, backoff, telemetry | done |
+| 2 | Home Assistant integration MVP | done |
+| 3 | Routing-based ETA (Waze / OSRM / ORS comparison) | planned |
+| 4 | Username/password + SMS 2FA login (instead of pasting a token) | planned |
+| 5 | Pooled-trip handling (needs a real pooled trip captured via telemetry) | planned |
+| 6 | Android app | planned |
+
+## Home Assistant
+
+### Install
+
+HACS → *Custom repositories* → add `https://github.com/jjpp/petra-tracker` as an *Integration*, install, restart.
+Or copy `custom_components/petra_tracker` into your HA `config/custom_components/`.
+
+### Set up
+
+*Settings → Devices & services → Add integration → Petra Trip Tracker*
+
+1. **Operator country** — the integration downloads that operator's public configuration
+   (API address and client key).
+2. **Token (JWT)** — for now, copy it from the web client: open the browser's developer tools on
+   the operator's web page, find a request to the API and copy the value after
+   `Authorization: JWT` (pasting the whole `JWT eyJ…` string is fine). Tokens last ~30 days; HA
+   asks for a new one when it expires (and fires an event 7 days before).
+
+The children on the account are discovered automatically from their bookings.
+
+### Entities
+
+Per child (device *"\<name\> transport"*):
+
+| Entity | Meaning |
+|---|---|
+| `sensor.<name>_transport_trip_status` | `idle`, `scheduled`, `approaching`, `at_pickup`, `onboard`, `finished`, `cancelled`, `unknown` (raw API status in attributes) |
+| `sensor.<name>_transport_eta` | minutes to the next waypoint; attributes `leg` (`to_pickup`/`to_destination`), `source` (`schedule`/`gps`/`arrived`), `distance_m`, `approximate` |
+| `device_tracker.<name>_transport_car` | live car position during a trip (shows on the HA map) |
+| `binary_sensor.<name>_transport_trip_active` | on while a car is on its way / at pickup / onboard |
+| `sensor.<name>_transport_next_pickup` | next scheduled pickup |
+
+Account (device *"Petra account"*): `token_expiry`, `api_schema_status`, `api_connection`.
+
+### Events (build notifications on these)
+
+| Event | When | Data |
+|---|---|---|
+| `petra_tracker_state_changed` | trip status changes | `person_name`, `old_status`, `new_status`, `eta_minutes`, `car_no`, … |
+| `petra_tracker_eta_changed` | ETA changed by ≥ the configured granularity (default 1 min) | `old_eta`, `new_eta`, `leg`, `status` |
+| `petra_tracker_heartbeat` | every *N* minutes during a trip (off by default) | `status`, `eta_minutes` |
+| `petra_tracker_connection_degraded` / `_restored` | API failing for ≥ *N* minutes (default 3) / back | `failed_for_s`, `trip_active` |
+| `petra_tracker_schema_drift` | a response no longer matches the assumed contract | `severity`, `kind`, `path`, `detail` |
+| `petra_tracker_token_expiring` | daily, from 7 days before token expiry | `expires_at`, `days_left` |
+
+Example: announce changes on a speaker.
+
+```yaml
+alias: Taxi announcements
+triggers:
+  - trigger: event
+    event_type: petra_tracker_state_changed
+  - trigger: event
+    event_type: petra_tracker_eta_changed
+conditions:
+  - "{{ trigger.event.data.new_status is not defined or trigger.event.data.new_status != 'scheduled' }}"
+actions:
+  - action: tts.speak
+    target:
+      entity_id: tts.piper
+    data:
+      media_player_entity_id: media_player.kitchen
+      message: >-
+        {% set e = trigger.event.data %}
+        {% if trigger.event.event_type == 'petra_tracker_eta_changed' %}
+          {{ e.person_name }}'s taxi: {{ e.new_eta }} minutes.
+        {% else %}
+          {{ {'approaching': e.person_name ~ "'s taxi is on its way",
+              'at_pickup': e.person_name ~ "'s taxi has arrived",
+              'onboard': e.person_name ~ ' has been picked up',
+              'finished': e.person_name ~ ' has arrived',
+              'cancelled': e.person_name ~ "'s trip was cancelled"}.get(e.new_status, e.new_status) }}
+        {% endif %}
+```
+
+### Options
+
+Poll interval during a trip (30 s) and when idle (10 min), fast-poll lead time before a pickup
+(45 min), ETA event granularity (1 min), heartbeat (off), connection-alert delay (3 min), track the
+car after pickup (on), assumed speed for the straight-line ETA (25 km/h), telemetry (off) and its
+retention (30 days).
+
+### Behaviour notes
+
+- **ETA** is currently straight-line distance × 1.4 at the assumed speed. It is rough on real
+  roads; routing-based ETA is phase 3.
+- **Polling** speeds up only around trips; failures back off exponentially with jitter (honouring
+  `Retry-After` and the server's rate-limit headers), and stale data stays visible meanwhile.
+- **Schema watchdog**: every response is checked against `contract/`. New fields are noted,
+  unknown status values and missing/retyped fields raise `petra_tracker_schema_drift` and change
+  `api_schema_status`.
+- **Telemetry** (opt-in) writes responses to `config/petra_tracker/telemetry/` on your HA host
+  with names, phone numbers, addresses and comments removed. It helps diagnose API changes; it
+  never leaves your machine.
+
+## Development
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install pytest-homeassistant-custom-component ruff
+.venv/bin/python -m pytest
+.venv/bin/ruff check .
+```
+
+All test data is synthetic (`tests/synthetic.py`). **Never commit real API responses, tokens,
+identifiers or locations** — derive synthetic fixtures instead.
+`python tools/check_public_hygiene.py` (also run in CI) flags things that look like real data.
+
+## Contributing
+
+Issues and pull requests are welcome. Because this is about children's transport, please be
+careful with data: when reporting a problem, describe it or attach the integration's
+*Download diagnostics* output (which removes tokens and personal data), never raw API responses,
+screenshots with names/addresses, or tokens. The same applies to test fixtures in pull requests.
+
+## License
+
+Copyright (C) 2026 Jaak Pruulmann-Vengerfeldt
+
+This program is free software: you can redistribute it and/or modify it under the terms of the
+GNU General Public License as published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version. See [LICENSE](LICENSE).
+
+GPL-3.0 (rather than GPL-2.0) because Home Assistant, aiohttp and the Android libraries this
+project builds on are Apache-2.0 licensed, which the FSF lists as compatible with GPLv3 but not
+with GPLv2.
+
+*Cabonline, Serviceresor, Skoltransport and Petra are names/trademarks of their respective owners
+and are used here only to describe compatibility.*

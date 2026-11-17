@@ -1,0 +1,320 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""DataUpdateCoordinator: polls the Petra API and turns it into entity state + events."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field, replace
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+import aiohttp
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
+
+from .const import (
+    CONF_API_KEY,
+    CONF_BASE_URL,
+    CONF_COUNTRY,
+    CONF_PERSONS,
+    CONF_TOKEN,
+    CONF_USER_ID,
+    DEFAULT_OPTIONS,
+    DOMAIN,
+    EVENT_CONNECTION_DEGRADED,
+    EVENT_CONNECTION_RESTORED,
+    EVENT_SCHEMA_DRIFT,
+    EVENT_TOKEN_EXPIRING,
+    LOGGER,
+    OPT_ACTIVE_INTERVAL_S,
+    OPT_ASSUMED_SPEED_KMH,
+    OPT_ETA_GRANULARITY_MIN,
+    OPT_FAILURE_ALERT_MIN,
+    OPT_HEARTBEAT_MIN,
+    OPT_IDLE_INTERVAL_MIN,
+    OPT_LEAD_TIME_MIN,
+    OPT_TELEMETRY,
+    OPT_TELEMETRY_RETENTION_DAYS,
+    OPT_TRACK_ONBOARD,
+    TOKEN_WARN_DAYS,
+)
+from .core import jwt
+from .core.backoff import Backoff
+from .core.client import (
+    PetraApiKeyError,
+    PetraAuthError,
+    PetraClient,
+    PetraEndpointError,
+    PetraError,
+    PetraRateLimited,
+    PetraTransientError,
+    fetch_operator_config,
+    local_day_bounds,
+)
+from .core.eta import EtaParams
+from .core.models import ACTIVE_PHASES, Trip, parse_order_list
+from .core.schema import SchemaIssue, SchemaValidator, Severity, collapse, worst
+from .core.telemetry import TelemetryWriter
+from .core.tracker import (
+    PersonState,
+    PollSettings,
+    TrackerSettings,
+    TripTracker,
+    plan_next_poll,
+    trips_needing_detail,
+)
+
+if TYPE_CHECKING:
+    from . import PetraConfigEntry
+
+MAX_REPORTED_ISSUES = 20
+
+
+@dataclass
+class PetraData:
+    persons: dict[int, PersonState]
+    updated_at: datetime
+    connection_ok: bool = True
+    failing_since: datetime | None = None
+    last_error: str | None = None
+    schema_severity: Severity | None = None
+    schema_issues: list[SchemaIssue] = field(default_factory=list)
+    rate_limit_remaining: int | None = None
+
+
+def _opt(entry: PetraConfigEntry, key: str) -> Any:
+    return entry.options.get(key, DEFAULT_OPTIONS[key])
+
+
+class PetraCoordinator(DataUpdateCoordinator[PetraData]):
+    config_entry: PetraConfigEntry
+
+    def __init__(
+        self, hass: HomeAssistant, entry: PetraConfigEntry, session: aiohttp.ClientSession
+    ) -> None:
+        self.poll_settings = PollSettings(
+            active_interval=timedelta(seconds=_opt(entry, OPT_ACTIVE_INTERVAL_S)),
+            idle_interval=timedelta(minutes=_opt(entry, OPT_IDLE_INTERVAL_MIN)),
+            lead_time=timedelta(minutes=_opt(entry, OPT_LEAD_TIME_MIN)),
+        )
+        super().__init__(
+            hass,
+            LOGGER,
+            name=DOMAIN,
+            config_entry=entry,
+            update_interval=self.poll_settings.active_interval,
+        )
+        self.session = session
+        self.client = PetraClient(
+            session, entry.data[CONF_BASE_URL], entry.data[CONF_API_KEY], entry.data[CONF_TOKEN]
+        )
+        self.user_id: int = entry.data[CONF_USER_ID]
+        heartbeat = _opt(entry, OPT_HEARTBEAT_MIN)
+        self.track_onboard: bool = _opt(entry, OPT_TRACK_ONBOARD)
+        self.tracker = TripTracker(
+            TrackerSettings(
+                eta_granularity_min=int(_opt(entry, OPT_ETA_GRANULARITY_MIN)),
+                heartbeat_interval=timedelta(minutes=heartbeat) if heartbeat else None,
+                track_onboard=self.track_onboard,
+                eta_params=EtaParams(assumed_speed_kmh=float(_opt(entry, OPT_ASSUMED_SPEED_KMH))),
+            )
+        )
+        self.failure_alert_after = timedelta(minutes=_opt(entry, OPT_FAILURE_ALERT_MIN))
+        self.backoff = Backoff(base=self.poll_settings.active_interval)
+        self.known_persons: dict[int, str | None] = {
+            int(k): v for k, v in entry.data.get(CONF_PERSONS, {}).items()
+        }
+        self.telemetry: TelemetryWriter | None = None
+        if _opt(entry, OPT_TELEMETRY):
+            self.telemetry = TelemetryWriter(
+                Path(hass.config.path(DOMAIN, "telemetry")),
+                retention_days=int(_opt(entry, OPT_TELEMETRY_RETENTION_DAYS)),
+            )
+        self._reported_issues: set[tuple[str, str, str]] = set()
+        self._degraded_announced = False
+        self._token_warned_on: date | None = None
+        self._pruned_on: date | None = None
+        self._api_key_refreshed = False
+
+    # -- helpers -----------------------------------------------------------------
+    @property
+    def token_info(self) -> jwt.TokenInfo | None:
+        try:
+            return jwt.decode(self.config_entry.data[CONF_TOKEN])
+        except jwt.InvalidToken:
+            return None
+
+    def _fire(self, event_type: str, data: dict[str, Any]) -> None:
+        self.hass.bus.async_fire(event_type, {"config_entry_id": self.config_entry.entry_id, **data})
+
+    async def _telemetry(self, now: datetime, endpoint: str, key: str, data: Any, status: int | None) -> None:
+        if self.telemetry is None:
+            return
+        try:
+            await self.hass.async_add_executor_job(
+                lambda: self.telemetry.record(now, endpoint, key, data, http_status=status)
+            )
+            if self._pruned_on != now.date():
+                self._pruned_on = now.date()
+                await self.hass.async_add_executor_job(self.telemetry.prune, now.date())
+        except OSError as err:
+            LOGGER.warning("Could not write telemetry: %s", err)
+
+    def _handle_schema(self, issues: list[SchemaIssue], endpoint: str, now: datetime) -> list[SchemaIssue]:
+        issues = collapse(issues)
+        for issue in issues:
+            key = (issue.kind, issue.path, issue.detail)
+            if key in self._reported_issues:
+                continue
+            self._reported_issues.add(key)
+            log = LOGGER.warning if issue.severity >= Severity.WARNING else LOGGER.info
+            log("Petra API schema drift on %s: %s %s (%s)", endpoint, issue.kind, issue.path, issue.detail)
+            self._fire(EVENT_SCHEMA_DRIFT, {"endpoint": endpoint, **issue.as_dict(), "at": now.isoformat()})
+        return issues
+
+    def _check_token(self, now: datetime) -> None:
+        info = self.token_info
+        if info is None or info.expires_at is None:
+            return
+        left = info.expires_at - now
+        if left <= timedelta(days=TOKEN_WARN_DAYS) and self._token_warned_on != now.date():
+            self._token_warned_on = now.date()
+            self._fire(
+                EVENT_TOKEN_EXPIRING,
+                {"expires_at": info.expires_at.isoformat(), "days_left": max(left.days, 0)},
+            )
+
+    async def _note_new_persons(self, trips: list[Trip]) -> None:
+        changed = False
+        for t in trips:
+            if t.person_id not in self.known_persons or (
+                self.known_persons[t.person_id] is None and t.person_name
+            ):
+                self.known_persons[t.person_id] = t.person_name
+                changed = True
+        if changed:
+            self.hass.config_entries.async_update_entry(
+                self.config_entry,
+                data={
+                    **self.config_entry.data,
+                    CONF_PERSONS: {str(k): v for k, v in self.known_persons.items()},
+                },
+            )
+
+    async def _refresh_operator_config(self) -> bool:
+        """The client API key was rejected: maybe the operator rotated it."""
+        if self._api_key_refreshed:
+            return False
+        self._api_key_refreshed = True
+        cfg = await fetch_operator_config(self.session, self.config_entry.data[CONF_COUNTRY])
+        if cfg.api_key == self.config_entry.data[CONF_API_KEY]:
+            return False
+        LOGGER.info("Operator API key changed; updating configuration")
+        self.hass.config_entries.async_update_entry(
+            self.config_entry,
+            data={**self.config_entry.data, CONF_API_KEY: cfg.api_key, CONF_BASE_URL: cfg.base_url},
+        )
+        self.client = PetraClient(
+            self.session, cfg.base_url, cfg.api_key, self.config_entry.data[CONF_TOKEN]
+        )
+        return True
+
+    # -- polling -----------------------------------------------------------------
+    async def _poll(self, now: datetime) -> PetraData:
+        start, end = local_day_bounds(now, dt_util.get_default_time_zone())
+        res = await self.client.list_orders(self.user_id, start, end)
+        await self._telemetry(now, "list", start.date().isoformat(), res.data, res.status)
+        issues = self._handle_schema(SchemaValidator().order_list(res.data), "order_list", now)
+        if not isinstance(res.data, dict):
+            raise PetraEndpointError("order list is not an object")
+        trips = parse_order_list(res.data)
+        await self._note_new_persons(trips)
+
+        for trip in trips_needing_detail(trips, self.track_onboard):
+            try:
+                det = await self.client.order_detail(trip.book_ref)
+            except (PetraTransientError, PetraEndpointError) as err:
+                # Keep going without live position; ETA falls back to the schedule.
+                LOGGER.debug("Detail for a trip failed: %s", err)
+                continue
+            await self._telemetry(now, "detail", str(trip.book_ref), det.data, det.status)
+            issues += self._handle_schema(SchemaValidator().order_detail(det.data), "order_detail", now)
+            if isinstance(det.data, dict):
+                trip.apply_detail(det.data)
+
+        persons, events = self.tracker.update(trips, now, self.known_persons)
+        for ev in events:
+            self._fire(f"{DOMAIN}_{ev.type}", ev.data)
+        self._check_token(now)
+
+        interval = plan_next_poll(trips, now, self.poll_settings)
+        throttle = self.client.last_rate_limit.throttle_delay()
+        if throttle is not None and throttle > interval:
+            LOGGER.info("Close to the API rate limit; slowing down to %s", throttle)
+            interval = throttle
+        self.update_interval = interval
+
+        current = [i for i in issues if i.severity >= Severity.WARNING] or issues
+        return PetraData(
+            persons=persons,
+            updated_at=now,
+            schema_severity=worst(issues),
+            schema_issues=current[:MAX_REPORTED_ISSUES],
+            rate_limit_remaining=self.client.last_rate_limit.remaining,
+        )
+
+    async def _async_update_data(self) -> PetraData:
+        now = dt_util.utcnow()
+        try:
+            data = await self._poll(now)
+        except PetraAuthError as err:
+            raise ConfigEntryAuthFailed(f"Petra token rejected: {err}") from err
+        except PetraApiKeyError as err:
+            if await self._refresh_operator_config():
+                self.update_interval = timedelta(seconds=5)
+                raise UpdateFailed("Operator API key was updated; retrying") from err
+            raise UpdateFailed(f"Operator API key rejected: {err}") from err
+        except PetraEndpointError as err:
+            self._handle_schema(
+                [SchemaIssue(Severity.BREAKING, "endpoint", "-", str(err)[:200])], "endpoint", now
+            )
+            return self._failed(now, err)
+        except PetraTransientError as err:
+            return self._failed(now, err)
+        except PetraError as err:
+            return self._failed(now, err)
+
+        if self.backoff.failures:
+            if self._degraded_announced:
+                self._fire(EVENT_CONNECTION_RESTORED, {"failed_for_s": int(self.backoff.failing_for(now).total_seconds())})
+            self._degraded_announced = False
+            self.backoff.success()
+        self._api_key_refreshed = False
+        return data
+
+    def _failed(self, now: datetime, err: Exception) -> PetraData:
+        retry_after = err.retry_after if isinstance(err, PetraRateLimited) else None
+        self.update_interval = self.backoff.failure(now, retry_after)
+        failing_for = self.backoff.failing_for(now)
+        LOGGER.debug("Poll failed (%s), retrying in %s", err, self.update_interval)
+        trip_active = bool(self.data) and any(
+            p.phase in ACTIVE_PHASES for p in self.data.persons.values()
+        )
+        if failing_for >= self.failure_alert_after and not self._degraded_announced:
+            self._degraded_announced = True
+            LOGGER.warning("Petra API unreachable for %s: %s", failing_for, err)
+            self._fire(
+                EVENT_CONNECTION_DEGRADED,
+                {"failed_for_s": int(failing_for.total_seconds()), "trip_active": trip_active, "error": str(err)[:200]},
+            )
+        if self.data is None:
+            raise UpdateFailed(str(err)) from err
+        # Keep showing the last known state, flagged as stale.
+        return replace(
+            self.data,
+            connection_ok=False,
+            failing_since=self.backoff.first_failure_at,
+            last_error=str(err)[:200],
+        )

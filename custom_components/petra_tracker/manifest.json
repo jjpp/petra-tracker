@@ -1,0 +1,15 @@
+{
+  "domain": "petra_tracker",
+  "name": "Petra Trip Tracker",
+  "codeowners": [
+    "@jjpp"
+  ],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/jjpp/petra-tracker",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/jjpp/petra-tracker/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

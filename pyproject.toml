@@ -1,0 +1,25 @@
+[project]
+name = "petra-tracker"
+version = "0.1.0"
+description = "Track school/service transport trips booked via the Petra (Cabonline/Frogne) platform."
+requires-python = ">=3.13"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "Jaak Pruulmann-Vengerfeldt" }]
+[project.urls]
+Homepage = "https://github.com/jjpp/petra-tracker"
+Issues = "https://github.com/jjpp/petra-tracker/issues"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+line-length = 110
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "ASYNC"]
+ignore = ["E501"]

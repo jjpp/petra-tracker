@@ -1,0 +1,23 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Never commit real data
+captures/
+telemetry/
+*.jsonl
+.env
+*.local.json
+
+# Android (later)
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.iml
+.idea/
