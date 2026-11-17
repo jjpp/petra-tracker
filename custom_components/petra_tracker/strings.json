@@ -73,9 +73,15 @@
           "unknown": "Unknown"
         }
       },
-      "eta": { "name": "ETA" },
-      "next_pickup": { "name": "Next pickup" },
-      "token_expiry": { "name": "Token expiry" },
+      "eta": {
+        "name": "ETA"
+      },
+      "next_pickup": {
+        "name": "Next pickup"
+      },
+      "token_expiry": {
+        "name": "Token expiry"
+      },
       "schema_status": {
         "name": "API schema status",
         "state": {
@@ -87,11 +93,22 @@
       }
     },
     "binary_sensor": {
-      "trip_active": { "name": "Trip active" },
-      "connection": { "name": "API connection" }
+      "trip_active": {
+        "name": "Trip active"
+      },
+      "connection": {
+        "name": "API connection"
+      }
     },
     "device_tracker": {
-      "car": { "name": "Car" }
+      "car": {
+        "name": "Car"
+      }
+    },
+    "switch": {
+      "polling": {
+        "name": "Polling"
+      }
     }
   }
 }

@@ -62,6 +62,7 @@ from .core.models import ACTIVE_PHASES, Trip, parse_order_list
 from .core.schema import SchemaIssue, SchemaValidator, Severity, collapse, worst
 from .core.telemetry import TelemetryWriter
 from .core.tracker import (
+    DEFAULT_RESTORE_MAX_AGE,
     PersonState,
     PollSettings,
     TrackerSettings,
@@ -86,6 +87,7 @@ class PetraData:
     schema_severity: Severity | None = None
     schema_issues: list[SchemaIssue] = field(default_factory=list)
     rate_limit_remaining: int | None = None
+    paused: bool = False  # polling switched off
 
 
 def _opt(entry: PetraConfigEntry, key: str) -> Any:
@@ -147,12 +149,50 @@ class PetraCoordinator(DataUpdateCoordinator[PetraData]):
         # Tracker memory survives restarts/reloads, so events are neither repeated
         # nor invented when Home Assistant starts.
         self._store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}")
+        # User settings that are not options (changing them must not reload the entry).
+        self._settings_store: Store[dict[str, Any]] = Store(
+            hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}.settings"
+        )
+        self.polling_enabled = True
+        self._last_poll_at: datetime | None = None
+        # The options this coordinator was built with; only a change of these reloads.
+        self.options = dict(entry.options)
 
     # -- persistence -------------------------------------------------------------
     async def async_restore_state(self) -> None:
         data = await self._store.async_load()
         if data and self.tracker.restore_state(data, dt_util.utcnow()):
             LOGGER.debug("Restored trip memory saved at %s", data.get("saved_at"))
+        settings = await self._settings_store.async_load() or {}
+        self.polling_enabled = settings.get("polling_enabled", True) is not False
+        if not self.polling_enabled:
+            self.update_interval = None
+            LOGGER.info("Polling is switched off; not contacting the service")
+
+    async def async_set_polling(self, enabled: bool) -> None:
+        """The polling switch: off = no requests at all until switched on again."""
+        if enabled == self.polling_enabled:
+            return
+        self.polling_enabled = enabled
+        await self._settings_store.async_save({"polling_enabled": enabled})
+        if enabled:
+            LOGGER.info("Polling switched on")
+            last = self._last_poll_at
+            if last is None or dt_util.utcnow() - last > DEFAULT_RESTORE_MAX_AGE:
+                self.tracker.mark_cold()  # long pause: do not announce stale changes
+            self.update_interval = self.poll_settings.active_interval
+            await self.async_refresh()
+        else:
+            LOGGER.info("Polling switched off")
+            self.update_interval = None
+            self.backoff.success()
+            self._degraded_announced = False
+            self.async_set_updated_data(self._paused_data())
+
+    def _paused_data(self) -> PetraData:
+        if self.data is not None:
+            return replace(self.data, paused=True)
+        return PetraData(persons={}, updated_at=dt_util.utcnow(), paused=True)
 
     async def async_save_state(self) -> None:
         """Write the tracker memory now (on unload/reload)."""
@@ -288,6 +328,16 @@ class PetraCoordinator(DataUpdateCoordinator[PetraData]):
         )
 
     async def _async_update_data(self) -> PetraData:
+        if not self.polling_enabled:
+            self.update_interval = None
+            return self._paused_data()
+        data = await self._async_poll_safely()
+        if not self.polling_enabled:  # switched off while a request was in flight
+            self.update_interval = None
+            return replace(data, paused=True)
+        return data
+
+    async def _async_poll_safely(self) -> PetraData:
         now = dt_util.utcnow()
         try:
             data = await self._poll(now)
@@ -314,6 +364,7 @@ class PetraCoordinator(DataUpdateCoordinator[PetraData]):
             self._degraded_announced = False
             self.backoff.success()
         self._api_key_refreshed = False
+        self._last_poll_at = now
         return data
 
     def _failed(self, now: datetime, err: Exception) -> PetraData:
@@ -336,6 +387,7 @@ class PetraCoordinator(DataUpdateCoordinator[PetraData]):
         # Keep showing the last known state, flagged as stale.
         return replace(
             self.data,
+            paused=False,
             connection_ok=False,
             failing_since=self.backoff.first_failure_at,
             last_error=str(err)[:200],

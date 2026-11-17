@@ -106,7 +106,9 @@ blueprint:
         in words, {car} car number, {pickup_time} scheduled pickup time (HH:MM),
         {minutes} minutes before/after the pickup time, {failed_minutes} minutes without
         connection, {days} days until the token expires, {severity} kind of API change.
-        A placeholder without a value becomes "?". Empty a text to never send that message.
+        A placeholder without a value becomes the "missing value" text ("?"); words, the
+        missing-value text and the time format can be changed under "Words and formats".
+        Empty a text to never send that message.
       input:
         msg_approaching:
           name: Car on its way
@@ -168,6 +170,84 @@ blueprint:
           default: "Taxi tracking: the service's API changed ({severity}); updates may be wrong."
           selector:
             text:
+    words:
+      name: Words and formats
+      icon: mdi:translate
+      collapsed: true
+      description: >-
+        The words the {status}, {leg} and {severity} placeholders are replaced with, the
+        text for a missing value, and how {pickup_time} is formatted. Change these to
+        translate the messages.
+      input:
+        word_scheduled:
+          name: 'Status "scheduled"'
+          default: scheduled
+          selector:
+            text:
+        word_approaching:
+          name: 'Status "car on its way"'
+          default: on its way
+          selector:
+            text:
+        word_at_pickup:
+          name: 'Status "car at pickup"'
+          default: at pickup
+          selector:
+            text:
+        word_onboard:
+          name: 'Status "picked up"'
+          default: on board
+          selector:
+            text:
+        word_finished:
+          name: 'Status "arrived"'
+          default: arrived
+          selector:
+            text:
+        word_cancelled:
+          name: 'Status "cancelled"'
+          default: cancelled
+          selector:
+            text:
+        word_unknown:
+          name: 'Status "unknown"'
+          default: unknown
+          selector:
+            text:
+        word_leg_pickup:
+          name: 'Next stop "pickup"'
+          default: pickup
+          selector:
+            text:
+        word_leg_destination:
+          name: 'Next stop "destination"'
+          default: destination
+          selector:
+            text:
+        word_severity_warning:
+          name: 'API change "warning" (unexpected values)'
+          default: warning
+          selector:
+            text:
+        word_severity_breaking:
+          name: 'API change "breaking" (incompatible)'
+          default: breaking
+          selector:
+            text:
+        missing_value:
+          name: Missing value
+          description: Used when a placeholder has no value.
+          default: "?"
+          selector:
+            text:
+        time_format:
+          name: Time format for {pickup_time}
+          description: >-
+            strftime format in Home Assistant's time zone, e.g. %H:%M (14:05),
+            %H.%M (14.05) or %-I:%M %p (2:05 PM).
+          default: "%H:%M"
+          selector:
+            text:
 
 mode: queued
 max: 10
@@ -210,28 +290,46 @@ variables:
     schema_drift: !input msg_schema_drift
   text_key: >-
     {{ 'car_not_assigned_late' if kind == 'car_not_assigned' and ev.get('pickup_passed') else kind }}
-  # Each placeholder's value; missing values become "?".
+  words:
+    status:
+      scheduled: !input word_scheduled
+      approaching: !input word_approaching
+      at_pickup: !input word_at_pickup
+      onboard: !input word_onboard
+      finished: !input word_finished
+      cancelled: !input word_cancelled
+      unknown: !input word_unknown
+    leg:
+      to_pickup: !input word_leg_pickup
+      to_destination: !input word_leg_destination
+    severity:
+      warning: !input word_severity_warning
+      breaking: !input word_severity_breaking
+  missing: !input missing_value
+  time_format: !input time_format
+  # Each placeholder's value; missing values become the "missing value" text.
   placeholders:
     "{child}": "{{ who }}"
     "{eta}": >-
       {% set eta = ev.get('new_eta') if kind == 'eta_changed' else ev.get('eta_minutes') %}
-      {{ '?' if eta is none else eta }}
-    "{old_eta}": "{{ ev.get('old_eta', '?') }}"
-    "{leg}": "{{ 'pickup' if ev.get('leg') == 'to_pickup' else 'destination' if ev.get('leg') else '?' }}"
+      {{ missing if eta is none else eta }}
+    "{old_eta}": "{{ ev.get('old_eta', missing) }}"
+    "{leg}": "{{ words.leg.get(ev.get('leg'), missing) }}"
     "{status}": >-
       {% set s = ev.get('status') or ev.get('new_status') %}
-      {{ {'scheduled': 'scheduled', 'approaching': 'on its way', 'at_pickup': 'at pickup',
-          'onboard': 'on board', 'finished': 'arrived', 'cancelled': 'cancelled'}.get(s, s or '?') }}
-    "{car}": "{{ ev.get('car_no') or '?' }}"
+      {{ words.status.get(s, s) if s else missing }}
+    "{car}": "{{ ev.get('car_no') or missing }}"
     "{pickup_time}": >-
       {% set p = as_datetime(ev.get('scheduled_pickup')) if ev.get('scheduled_pickup') else none %}
-      {{ as_local(p).strftime('%H:%M') if p else '?' }}
+      {{ as_local(p).strftime(time_format) if p else missing }}
     "{minutes}": >-
-      {{ (ev.get('minutes_to_pickup') | abs) if ev.get('minutes_to_pickup') is not none else '?' }}
+      {{ (ev.get('minutes_to_pickup') | abs) if ev.get('minutes_to_pickup') is not none else missing }}
     "{failed_minutes}": >-
-      {{ ((ev.get('failed_for_s') / 60) | round(0) | int) if ev.get('failed_for_s') is not none else '?' }}
-    "{days}": "{{ ev.get('days_left', '?') }}"
-    "{severity}": "{{ ev.get('severity', '?') }}"
+      {{ ((ev.get('failed_for_s') / 60) | round(0) | int) if ev.get('failed_for_s') is not none else missing }}
+    "{days}": "{{ ev.get('days_left', missing) }}"
+    "{severity}": >-
+      {% set sev = ev.get('severity') %}
+      {{ words.severity.get(sev, sev) if sev else missing }}
   message: >-
     {%- set ns = namespace(text=texts.get(text_key) or '') -%}
     {%- for k, v in placeholders.items() %}{% set ns.text = ns.text | replace(k, v | string) %}{% endfor -%}

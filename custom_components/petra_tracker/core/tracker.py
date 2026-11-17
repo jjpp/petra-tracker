@@ -152,6 +152,11 @@ class TripTracker:
             return persons, []
         return persons, events
 
+    def mark_cold(self) -> None:
+        """Make the next update silent again (e.g. resuming after a long pause):
+        what changed meanwhile is recorded, not announced."""
+        self._warm = False
+
     # -- persistence (so restarts neither repeat nor invent notifications) -----
     def export_state(self, now: datetime) -> dict[str, Any]:
         m = self._mem

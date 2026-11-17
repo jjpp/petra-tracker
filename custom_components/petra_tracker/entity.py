@@ -50,6 +50,11 @@ class PetraPersonEntity(PetraEntity):
         )
 
     @property
+    def available(self) -> bool:
+        data = self.coordinator.data
+        return super().available and not (data and data.paused)
+
+    @property
     def person(self) -> PersonState | None:
         data = self.coordinator.data
         return data.persons.get(self.person_id) if data else None

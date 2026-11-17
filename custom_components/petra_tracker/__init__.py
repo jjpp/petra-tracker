@@ -12,7 +12,7 @@ from homeassistant.helpers.storage import Store
 from .const import DOMAIN, STORAGE_VERSION
 from .coordinator import PetraCoordinator
 
-PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.DEVICE_TRACKER]
+PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.DEVICE_TRACKER, Platform.SWITCH]
 
 type PetraConfigEntry = ConfigEntry[PetraCoordinator]
 
@@ -36,9 +36,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: PetraConfigEntry) -> bo
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: PetraConfigEntry) -> None:
-    """Delete the saved trip memory when the integration is removed."""
-    await Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}").async_remove()
+    """Delete the saved trip memory and settings when the integration is removed."""
+    for key in (f"{DOMAIN}.{entry.entry_id}", f"{DOMAIN}.{entry.entry_id}.settings"):
+        await Store(hass, STORAGE_VERSION, key).async_remove()
 
 
 async def _async_options_updated(hass: HomeAssistant, entry: PetraConfigEntry) -> None:
-    await hass.config_entries.async_reload(entry.entry_id)
+    # Home Assistant calls this for any change of the entry, including the data the
+    # integration updates itself (e.g. a newly discovered child). Reload only when
+    # the user changed the options.
+    if dict(entry.options) != entry.runtime_data.options:
+        await hass.config_entries.async_reload(entry.entry_id)

@@ -148,3 +148,27 @@ async def test_account_messages_use_their_placeholders(hass, setup_blueprint):
         ("Taxi tracking", "Taxi tracking: the login token expires in 5 days."),
         ("Taxi tracking", "Taxi tracking has had no connection for 10 min."),
     ]
+
+
+async def test_words_missing_value_and_time_format_are_configurable(hass, setup_blueprint):
+    notify, _ = await setup_blueprint(
+        title="Skolskjuts",
+        notify_on=["heartbeat", "approaching", "schema_drift"],
+        msg_heartbeat="{child}: {status}, {eta} min till {leg}",
+        msg_approaching="Taxi {car} till {child} kl. {pickup_time}",
+        msg_schema_drift="API-ändring: {severity}",
+        word_onboard="ombord",
+        word_leg_destination="skolan",
+        word_severity_breaking="inkompatibel",
+        missing_value="–",
+        time_format="%H.%M",
+    )
+    await fire(hass, "heartbeat", person_name="Alex", status="onboard", eta_minutes=8,
+               leg="to_destination", scheduled_pickup=PICKUP)
+    await fire(hass, "state_changed", **state("approaching", car_no=None))
+    await fire(hass, "schema_drift", severity="breaking", kind="type", path="$.x", detail="")
+    assert [c.data["message"] for c in notify] == [
+        "Alex: ombord, 8 min till skolan",
+        "Taxi – till Alex kl. 07.50",
+        "API-ändring: inkompatibel",
+    ]

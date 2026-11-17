@@ -27,6 +27,7 @@ async def async_get_config_entry_diagnostics(
         "token_expires_at": token.expires_at.isoformat() if token and token.expires_at else None,
         "update_interval_s": coordinator.update_interval.total_seconds() if coordinator.update_interval else None,
         "backoff_failures": coordinator.backoff.failures,
+        "polling_enabled": coordinator.polling_enabled,
         "state": None
         if data is None
         else {

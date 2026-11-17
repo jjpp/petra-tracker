@@ -69,7 +69,8 @@ Per child (device *"\<name\> transport"*):
 | `binary_sensor.<name>_transport_trip_active` | on while a car is on its way / at pickup / onboard |
 | `sensor.<name>_transport_next_pickup` | next scheduled pickup |
 
-Account (device *"Petra account"*): `token_expiry`, `api_schema_status`, `api_connection`.
+Account (device *"Petra account"*): `token_expiry`, `api_schema_status`, `api_connection`, and the
+**`switch.petra_account_polling`** switch (see *Turning it off*).
 
 ### Notifications (blueprint)
 
@@ -106,6 +107,10 @@ English). Placeholders are replaced with the trip's details, also in the title:
 | `{failed_minutes}`, `{days}`, `{severity}` | connection outage, token expiry, API change |
 
 A placeholder without a value becomes `?`. Empty a text to never send that message.
+
+To **translate** the messages, change the texts and, in the *Words and formats* section, the words
+used for `{status}`, `{leg}` and `{severity}`, the missing-value text (`?`) and the time format of
+`{pickup_time}` (`%H:%M`; e.g. `%H.%M` or `%-I:%M %p`).
 
 **Updating the blueprint:** *Settings → Automations & scenes → Blueprints →* ⋮ next to
 *Petra Trip Tracker – trip notifications* *→ Re-import blueprint*. Automations created from it use
@@ -146,6 +151,40 @@ Poll interval during a trip (30 s) and when idle (10 min), fast-poll lead time b
 (1 min; 0 = at pickup time), connection-alert delay (3 min), track the
 car after pickup (on), assumed speed for the straight-line ETA (25 km/h), telemetry (off) and its
 retention (30 days).
+
+### Turning it off
+
+- **Notifications only:** turn off the automation(s) created from the blueprint
+  (*Settings → Automations & scenes*).
+- **Pause (e.g. school holidays):** turn off `switch.petra_account_polling`. No requests are sent
+  while it is off, and the children's entities are unavailable. It stays off across restarts;
+  turning it on polls immediately (after a pause of more than 30 minutes, changes that happened
+  meanwhile are not announced). Because it is a switch, automations can control it, e.g. from a
+  holiday calendar:
+
+  ```yaml
+  triggers:
+    - trigger: calendar
+      event: start
+      entity_id: calendar.school_holidays
+      id: holiday
+    - trigger: calendar
+      event: end
+      entity_id: calendar.school_holidays
+      id: school
+  actions:
+    - action: "switch.turn_{{ 'off' if trigger.id == 'holiday' else 'on' }}"
+      target:
+        entity_id: switch.petra_account_polling
+  ```
+- **All contact with the service (emergency stop):** *Settings → Devices & services → Petra Trip
+  Tracker →* ⋮ *→ Disable*. Polling stops immediately and the entities become unavailable; the
+  configuration and token are kept. *Enable* resumes.
+- **Remove completely:** delete the integration entry (removes the token and saved state), then
+  uninstall it in *Settings → Marketplace*.
+- **If Home Assistant has problems starting** because of a custom integration: restart in safe mode
+  (*Settings →* ⋮ *→ Restart Home Assistant → Advanced options → Restart Home Assistant in safe
+  mode*); custom integrations are then not loaded.
 
 ### Behaviour notes
 

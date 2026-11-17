@@ -189,6 +189,10 @@ ignored and the first snapshot is then silent. A blueprint
 (`blueprints/automation/petra_tracker/trip_notifications.yaml`) turns the events into push and/or
 TTS notifications.
 
+**Polling switch:** `switch.petra_account_polling` (state kept in HA storage, not in the config
+entry, so toggling it does not reload the entry). Off = no requests; children's entities are
+unavailable; on = immediate poll, silent if the pause exceeded 30 min.
+
 ### Services & Options
 Services: `set_token`, `export_telemetry`, `force_poll`, `reauth` (follow-up).
 Options: poll cadences, pickup lead time, heartbeat interval, ETA-announce granularity,
