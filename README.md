@@ -150,6 +150,14 @@ All test data is synthetic (`tests/synthetic.py`). **Never commit real API respo
 identifiers or locations** — derive synthetic fixtures instead.
 `python tools/check_public_hygiene.py` (also run in CI) flags things that look like real data.
 
+### Releasing
+
+1. Bump `version` in `custom_components/petra_tracker/manifest.json` **and** `pyproject.toml`
+   (CI checks they agree).
+2. Commit, push, then create a GitHub release with tag `v<version>` (CI fails if the tag and the
+   manifest differ). Home Assistant's Marketplace offers releases, not commits, as updates; the
+   release notes are shown to users under *Settings → Updates*.
+
 ## Contributing
 
 Issues and pull requests are welcome. Because this is about children's transport, please be
