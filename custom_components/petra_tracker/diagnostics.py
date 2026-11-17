@@ -9,10 +9,12 @@ from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
 from . import PetraConfigEntry
-from .const import CONF_API_KEY, CONF_PERSONS, CONF_TOKEN, CONF_USER_ID
+from .const import CONF_API_KEY, CONF_PERSONS, CONF_TOKEN, CONF_USER_ID, OPT_ROUTING_API_KEY
 from .core.schema import schema_version
 
-TO_REDACT = {CONF_TOKEN, CONF_API_KEY, CONF_USER_ID, CONF_PERSONS, "unique_id", "title"}
+TO_REDACT = {
+    CONF_TOKEN, CONF_API_KEY, CONF_USER_ID, CONF_PERSONS, OPT_ROUTING_API_KEY, "unique_id", "title"
+}
 
 
 async def async_get_config_entry_diagnostics(
@@ -28,6 +30,8 @@ async def async_get_config_entry_diagnostics(
         "update_interval_s": coordinator.update_interval.total_seconds() if coordinator.update_interval else None,
         "backoff_failures": coordinator.backoff.failures,
         "polling_enabled": coordinator.polling_enabled,
+        "routing_engine": coordinator.router.name if coordinator.router else "straight_line",
+        "routing_error": coordinator.data.routing_error if coordinator.data else None,
         "state": None
         if data is None
         else {

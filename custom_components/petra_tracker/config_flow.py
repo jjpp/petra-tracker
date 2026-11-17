@@ -42,9 +42,13 @@ from .const import (
     OPT_IDLE_INTERVAL_MIN,
     OPT_LATE_WARNING_MIN,
     OPT_LEAD_TIME_MIN,
+    OPT_ROUTING,
+    OPT_ROUTING_API_KEY,
+    OPT_ROUTING_URL,
     OPT_TELEMETRY,
     OPT_TELEMETRY_RETENTION_DAYS,
     OPT_TRACK_ONBOARD,
+    OPT_WAZE_REGION,
     PERSON_DISCOVERY_DAYS,
 )
 from .core import jwt
@@ -57,6 +61,7 @@ from .core.client import (
     discover_persons,
     fetch_operator_config,
 )
+from .core.routing import ENGINES, OPENROUTESERVICE, WAZE_REGIONS
 
 TOKEN_SELECTOR = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
 
@@ -189,19 +194,53 @@ OPTION_SELECTORS = {
     OPT_FAILURE_ALERT_MIN: _number(1, 120, 1, "min"),
     OPT_TRACK_ONBOARD: BooleanSelector(),
     OPT_ASSUMED_SPEED_KMH: _number(5, 100, 1, "km/h"),
+    OPT_ROUTING: SelectSelector(
+        SelectSelectorConfig(
+            options=list(ENGINES), translation_key="routing", mode=SelectSelectorMode.DROPDOWN
+        )
+    ),
+    OPT_WAZE_REGION: SelectSelector(
+        SelectSelectorConfig(
+            options=list(WAZE_REGIONS), translation_key="waze_region", mode=SelectSelectorMode.DROPDOWN
+        )
+    ),
     OPT_TELEMETRY: BooleanSelector(),
     OPT_TELEMETRY_RETENTION_DAYS: _number(1, 365, 1, "d"),
+}
+# Free-text options: a cleared field must stay cleared, so they use a suggested
+# value instead of a default (HA omits empty text fields from the submission).
+TEXT_OPTIONS = {
+    OPT_ROUTING_URL: TextSelector(TextSelectorConfig(type=TextSelectorType.URL)),
+    OPT_ROUTING_API_KEY: TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
 }
 INT_OPTIONS = {k for k, v in DEFAULT_OPTIONS.items() if isinstance(v, int) and not isinstance(v, bool)}
 
 
+def _options_schema(current: dict[str, Any]) -> vol.Schema:
+    fields: dict[Any, Any] = {}
+    for key, sel in OPTION_SELECTORS.items():
+        fields[vol.Required(key, default=current[key])] = sel
+        if key == OPT_ROUTING:  # keep the engine's settings next to it
+            for tkey, tsel in TEXT_OPTIONS.items():
+                fields[vol.Optional(tkey, description={"suggested_value": current.get(tkey, "")})] = tsel
+    return vol.Schema(fields)
+
+
 class PetraOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
         if user_input is not None:
             cleaned = {k: int(v) if k in INT_OPTIONS else v for k, v in user_input.items()}
-            return self.async_create_entry(data=cleaned)
-        current = {**DEFAULT_OPTIONS, **self.config_entry.options}
-        schema = vol.Schema(
-            {vol.Required(key, default=current[key]): sel for key, sel in OPTION_SELECTORS.items()}
-        )
-        return self.async_show_form(step_id="init", data_schema=schema)
+            for key in TEXT_OPTIONS:
+                cleaned[key] = str(cleaned.get(key) or "").strip()
+            if (
+                cleaned[OPT_ROUTING] == OPENROUTESERVICE
+                and not cleaned[OPT_ROUTING_API_KEY]
+                and not cleaned[OPT_ROUTING_URL]
+            ):
+                # The public server needs a (free) key; a self-hosted one does not.
+                errors[OPT_ROUTING_API_KEY] = "api_key_required"
+            else:
+                return self.async_create_entry(data=cleaned)
+        current = {**DEFAULT_OPTIONS, **self.config_entry.options, **(user_input or {})}
+        return self.async_show_form(step_id="init", data_schema=_options_schema(current), errors=errors)

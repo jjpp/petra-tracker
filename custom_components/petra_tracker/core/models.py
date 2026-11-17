@@ -112,6 +112,16 @@ def decode_gps_positions(raw: Any) -> list[GpsFix]:
 
 
 @dataclass(frozen=True)
+class RoutedLeg:
+    """Road route from the car's last fix to the next stop (set by routing.py)."""
+
+    leg: str  # eta.Leg value
+    duration_s: float
+    distance_m: float
+    engine: str
+
+
+@dataclass(frozen=True)
 class PersonEvent:
     type: int
     time: datetime
@@ -137,6 +147,7 @@ class Trip:
     coordinated_with_other: bool
     events: list[PersonEvent] = field(default_factory=list)
     gps: list[GpsFix] = field(default_factory=list)
+    route: RoutedLeg | None = None
 
     @property
     def last_fix(self) -> GpsFix | None:

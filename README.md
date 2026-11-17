@@ -25,7 +25,7 @@ Contents:
 |---|---|---|
 | 1 | Core: client, schema guard, ETA (straight-line), tracker, backoff, telemetry | done |
 | 2 | Home Assistant integration MVP | done |
-| 3 | Routing-based ETA (Waze / OSRM / ORS comparison) | planned |
+| 3 | Routing-based ETA (Waze / OSRM / ORS) | done; engine comparison on real trips ongoing |
 | 4 | Username/password + SMS 2FA login (instead of pasting a token) | planned |
 | 5 | Pooled-trip handling (needs a real pooled trip captured via telemetry) | planned |
 | 6 | Android app | planned |
@@ -149,8 +149,26 @@ state: state triggers also fire when an entity comes back after a restart (e.g. 
 Poll interval during a trip (30 s) and when idle (10 min), fast-poll lead time before a pickup
 (45 min), ETA event granularity (1 min), heartbeat (off), "no car assigned" warning lead time
 (1 min; 0 = at pickup time), connection-alert delay (3 min), track the
-car after pickup (on), assumed speed for the straight-line ETA (25 km/h), telemetry (off) and its
-retention (30 days).
+car after pickup (on), assumed speed for the straight-line ETA (25 km/h), ETA routing engine (straight
+line) with its server URL / API key / Waze region, telemetry (off) and its retention (30 days).
+
+### ETA routing engines
+
+| Engine | Live traffic | Needs | Notes |
+|---|---|---|---|
+| **Straight line** (default) | no | nothing | distance × 1.4 at the assumed speed; no external service |
+| **OSRM** | no | nothing (or your own server) | road routing; the public demo server is for light use — self-host for regular use |
+| **OpenRouteService** | no | free API key (or your own server) | road routing |
+| **Waze** | **yes** | nothing | unofficial service (same library as Home Assistant's Waze Travel Time); may break |
+
+Choosing an engine other than *straight line* sends the car's position and the trip's pickup and
+destination locations to that service. If it fails, the ETA falls back to the straight-line
+estimate (the ETA sensor's `routing` attribute shows which one was used) and the integration logs
+a warning once. Results are reused while the car has moved less than 150 m (max. 2 minutes), so
+the engine is asked at most about once per poll.
+
+`tools/compare_eta.py` replays a recorded trip through several engines and compares their ETAs
+with the actual arrival times.
 
 ### Turning it off
 
@@ -188,8 +206,8 @@ retention (30 days).
 
 ### Behaviour notes
 
-- **ETA** is currently straight-line distance × 1.4 at the assumed speed. It is rough on real
-  roads; routing-based ETA is phase 3.
+- **ETA**: straight-line distance × 1.4 at the assumed speed by default, which is rough on real
+  roads; choose a routing engine for road-based ETAs (see above).
 - **Polling** speeds up only around trips; failures back off exponentially with jitter (honouring
   `Retry-After` and the server's rate-limit headers), and stale data stays visible meanwhile.
 - **Schema watchdog**: every response is checked against `contract/`. New fields are noted,

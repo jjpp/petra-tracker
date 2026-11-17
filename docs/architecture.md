@@ -193,6 +193,11 @@ TTS notifications.
 entry, so toggling it does not reload the entry). Off = no requests; children's entities are
 unavailable; on = immediate poll, silent if the pause exceeded 30 min.
 
+**Routing (implemented):** option `routing` = straight_line (default) | osrm | openrouteservice | waze
+(`core/routing.py`). The route from the car's last fix to the next stop is attached to the trip
+before ETA estimation; failures fall back to straight line. A small cache re-uses a route while the
+car moved < 150 m and the result is < 2 min old. `tools/compare_eta.py` compares engines on captures.
+
 ### Services & Options
 Services: `set_token`, `export_telemetry`, `force_poll`, `reauth` (follow-up).
 Options: poll cadences, pickup lead time, heartbeat interval, ETA-announce granularity,

@@ -98,6 +98,7 @@ class EtaSensor(PetraPersonEntity, SensorEntity):
             "last_fix": _iso(e.last_fix),
             "gps_stale": e.gps_stale,
             "approximate": e.approximate,
+            "routing": e.routing,
         }
 
 

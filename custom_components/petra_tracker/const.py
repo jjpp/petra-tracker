@@ -28,6 +28,10 @@ OPT_TRACK_ONBOARD = "track_onboard"
 OPT_ASSUMED_SPEED_KMH = "assumed_speed_kmh"
 OPT_TELEMETRY = "telemetry"
 OPT_TELEMETRY_RETENTION_DAYS = "telemetry_retention_days"
+OPT_ROUTING = "routing"
+OPT_ROUTING_URL = "routing_url"
+OPT_ROUTING_API_KEY = "routing_api_key"
+OPT_WAZE_REGION = "waze_region"
 
 DEFAULT_OPTIONS: dict[str, int | float | bool] = {
     OPT_ACTIVE_INTERVAL_S: 30,
@@ -41,6 +45,10 @@ DEFAULT_OPTIONS: dict[str, int | float | bool] = {
     OPT_ASSUMED_SPEED_KMH: 25,
     OPT_TELEMETRY: False,
     OPT_TELEMETRY_RETENTION_DAYS: 30,
+    OPT_ROUTING: "straight_line",  # no external service unless the user picks one
+    OPT_ROUTING_URL: "",  # empty = the engine's public default
+    OPT_ROUTING_API_KEY: "",
+    OPT_WAZE_REGION: "EU",
 }
 
 TOKEN_WARN_DAYS = 7

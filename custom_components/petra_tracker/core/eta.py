@@ -15,6 +15,8 @@ from enum import StrEnum
 
 from .models import GpsFix, LatLon, Phase, Trip
 
+STRAIGHT_LINE = "straight_line"
+
 EARTH_RADIUS_M = 6_371_000.0
 ARRIVED_RADIUS_M = 60.0
 GPS_STALE_AFTER = timedelta(minutes=5)
@@ -46,6 +48,7 @@ class Eta:
     last_fix: datetime | None = None
     gps_stale: bool = False
     approximate: bool = False  # e.g. pooled trip: car may stop elsewhere first
+    routing: str | None = None  # engine used for a GPS-based ETA
 
 
 def haversine_m(a: LatLon | GpsFix, b: LatLon | GpsFix) -> float:
@@ -61,39 +64,47 @@ def drive_minutes(distance_m: float, params: EtaParams) -> float:
     return distance_m * params.road_factor / speed_ms / 60.0
 
 
+def eta_target(trip: Trip, track_onboard: bool = True) -> tuple[Leg, LatLon] | None:
+    """The next stop the car is driving to, if it is driving to one."""
+    if trip.phase is Phase.APPROACHING and trip.pickup is not None:
+        return Leg.TO_PICKUP, trip.pickup
+    if trip.phase is Phase.ONBOARD and track_onboard and trip.destination is not None:
+        return Leg.TO_DESTINATION, trip.destination
+    return None
+
+
+def _driving_eta(trip: Trip, leg: Leg, dest: LatLon, fix: GpsFix, now: datetime,
+                 params: EtaParams, pooled: bool) -> Eta:
+    stale = now - fix.time > GPS_STALE_AFTER
+    straight = haversine_m(fix, dest)
+    if straight <= ARRIVED_RADIUS_M:
+        return Eta(0, leg, EtaSource.ARRIVED, straight, fix.time, stale, pooled)
+    route = trip.route
+    if route is not None and route.leg == leg.value:
+        minutes, distance, routing = route.duration_s / 60, route.distance_m, route.engine
+    else:
+        minutes, distance, routing = drive_minutes(straight, params), straight, STRAIGHT_LINE
+    return Eta(max(round(minutes), 1), leg, EtaSource.GPS, distance, fix.time, stale, pooled, routing)
+
+
 def estimate_eta(
     trip: Trip, now: datetime, params: EtaParams, *, track_onboard: bool = True
 ) -> Eta | None:
     """Return the ETA to the next waypoint of the trip, or None if not meaningful."""
     pooled = (trip.coordinated_position or 0) > 1
     fix = trip.last_fix
-    stale = bool(fix and now - fix.time > GPS_STALE_AFTER)
+    target = eta_target(trip, track_onboard)
+    if target is not None and fix is not None:
+        return _driving_eta(trip, *target, fix, now, params, pooled)
 
     if trip.phase in (Phase.SCHEDULED, Phase.APPROACHING):
-        if trip.phase is Phase.APPROACHING and fix is not None and trip.pickup is not None:
-            dist = haversine_m(fix, trip.pickup)
-            if dist <= ARRIVED_RADIUS_M:
-                return Eta(0, Leg.TO_PICKUP, EtaSource.ARRIVED, dist, fix.time, stale, pooled)
-            minutes = round(drive_minutes(dist, params))
-            return Eta(max(minutes, 1), Leg.TO_PICKUP, EtaSource.GPS, dist, fix.time, stale, pooled)
         if trip.scheduled_pickup is not None:
             minutes = math.ceil((trip.scheduled_pickup - now).total_seconds() / 60)
             return Eta(max(minutes, 0), Leg.TO_PICKUP, EtaSource.SCHEDULE, approximate=pooled)
         return None
-
     if trip.phase is Phase.AT_PICKUP:
         return Eta(0, Leg.TO_PICKUP, EtaSource.ARRIVED, last_fix=fix.time if fix else None)
-
-    if trip.phase is Phase.ONBOARD and track_onboard:
-        if fix is not None and trip.destination is not None:
-            dist = haversine_m(fix, trip.destination)
-            if dist <= ARRIVED_RADIUS_M:
-                return Eta(0, Leg.TO_DESTINATION, EtaSource.ARRIVED, dist, fix.time, stale, pooled)
-            minutes = round(drive_minutes(dist, params))
-            return Eta(
-                max(minutes, 1), Leg.TO_DESTINATION, EtaSource.GPS, dist, fix.time, stale, pooled
-            )
-        if trip.scheduled_dropoff is not None:
-            minutes = math.ceil((trip.scheduled_dropoff - now).total_seconds() / 60)
-            return Eta(max(minutes, 0), Leg.TO_DESTINATION, EtaSource.SCHEDULE, approximate=pooled)
+    if trip.phase is Phase.ONBOARD and track_onboard and trip.scheduled_dropoff is not None:
+        minutes = math.ceil((trip.scheduled_dropoff - now).total_seconds() / 60)
+        return Eta(max(minutes, 0), Leg.TO_DESTINATION, EtaSource.SCHEDULE, approximate=pooled)
     return None

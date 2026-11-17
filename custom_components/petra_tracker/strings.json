@@ -45,9 +45,22 @@
           "track_onboard": "Track the car after pickup (ETA to destination)",
           "assumed_speed_kmh": "Assumed average speed for ETA",
           "telemetry": "Store redacted API responses locally (for analysis)",
-          "telemetry_retention_days": "Keep telemetry for"
+          "telemetry_retention_days": "Keep telemetry for",
+          "routing": "ETA routing engine",
+          "routing_url": "Routing server URL (optional)",
+          "routing_api_key": "Routing API key",
+          "waze_region": "Waze region"
+        },
+        "data_description": {
+          "routing": "Straight line needs no external service. OSRM, OpenRouteService and Waze give road-based (Waze: live-traffic) ETAs, but receive the car's position and the trip's pickup and destination locations. If the engine fails, the straight-line estimate is used.",
+          "routing_url": "Leave empty for the engine's public server (OSRM: the project-osrm.org demo server; please self-host for regular use). Set it to use your own OSRM or OpenRouteService server.",
+          "routing_api_key": "Needed for the public OpenRouteService server (free key at openrouteservice.org).",
+          "waze_region": "Only used with Waze."
         }
       }
+    },
+    "error": {
+      "api_key_required": "The public OpenRouteService server needs an API key (or set the URL of your own server)."
     }
   },
   "selector": {
@@ -55,6 +68,22 @@
       "options": {
         "se": "Sweden",
         "no": "Norway"
+      }
+    },
+    "routing": {
+      "options": {
+        "straight_line": "Straight line (no external service)",
+        "osrm": "OSRM",
+        "openrouteservice": "OpenRouteService",
+        "waze": "Waze (live traffic, unofficial)"
+      }
+    },
+    "waze_region": {
+      "options": {
+        "EU": "Europe",
+        "US": "North America",
+        "IL": "Israel",
+        "AU": "Australia"
       }
     }
   },

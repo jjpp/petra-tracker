@@ -10,6 +10,8 @@
   "integration_type": "hub",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/jjpp/petra-tracker/issues",
-  "requirements": [],
-  "version": "0.3.0"
+  "requirements": [
+    "pywaze>=1.2.4"
+  ],
+  "version": "0.4.0"
 }

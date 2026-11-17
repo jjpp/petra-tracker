@@ -38,9 +38,13 @@ from .const import (
     OPT_IDLE_INTERVAL_MIN,
     OPT_LATE_WARNING_MIN,
     OPT_LEAD_TIME_MIN,
+    OPT_ROUTING,
+    OPT_ROUTING_API_KEY,
+    OPT_ROUTING_URL,
     OPT_TELEMETRY,
     OPT_TELEMETRY_RETENTION_DAYS,
     OPT_TRACK_ONBOARD,
+    OPT_WAZE_REGION,
     STORAGE_VERSION,
     TOKEN_WARN_DAYS,
 )
@@ -59,6 +63,7 @@ from .core.client import (
 )
 from .core.eta import EtaParams
 from .core.models import ACTIVE_PHASES, Trip, parse_order_list
+from .core.routing import RouteCache, attach_route, make_provider
 from .core.schema import SchemaIssue, SchemaValidator, Severity, collapse, worst
 from .core.telemetry import TelemetryWriter
 from .core.tracker import (
@@ -88,6 +93,7 @@ class PetraData:
     schema_issues: list[SchemaIssue] = field(default_factory=list)
     rate_limit_remaining: int | None = None
     paused: bool = False  # polling switched off
+    routing_error: str | None = None  # last routing failure (ETA fell back to straight line)
 
 
 def _opt(entry: PetraConfigEntry, key: str) -> Any:
@@ -115,6 +121,16 @@ class PetraCoordinator(DataUpdateCoordinator[PetraData]):
             update_interval=self.poll_settings.active_interval,
         )
         self.session = session
+        self.router = make_provider(
+            _opt(entry, OPT_ROUTING),
+            session,
+            url=str(_opt(entry, OPT_ROUTING_URL) or ""),
+            api_key=str(_opt(entry, OPT_ROUTING_API_KEY) or ""),
+            waze_region=_opt(entry, OPT_WAZE_REGION),
+        )
+        self.route_cache = RouteCache()
+        self._routing_failures = 0
+        self._routing_error: str | None = None
         self.client = PetraClient(
             session, entry.data[CONF_BASE_URL], entry.data[CONF_API_KEY], entry.data[CONF_TOKEN]
         )
@@ -264,6 +280,30 @@ class PetraCoordinator(DataUpdateCoordinator[PetraData]):
                 },
             )
 
+    async def _route(self, trips: list[Trip], now: datetime) -> None:
+        """Road-route the active trips; on failure their ETA uses the straight line."""
+        assert self.router is not None
+        errors = [
+            err
+            for trip in trips_needing_detail(trips, self.track_onboard)
+            if (err := await attach_route(
+                trip, now, self.router, self.route_cache, track_onboard=self.track_onboard
+            ))
+        ]
+        self.route_cache.prune({t.book_ref for t in trips})
+        if errors:
+            self._routing_failures += 1
+            self._routing_error = errors[-1][:200]
+            if self._routing_failures == 1:
+                LOGGER.warning(
+                    "Routing engine %s failed (%s); using straight-line ETA until it works again",
+                    self.router.name, self._routing_error,
+                )
+        elif self._routing_failures:
+            LOGGER.info("Routing engine %s works again", self.router.name)
+            self._routing_failures = 0
+            self._routing_error = None
+
     async def _refresh_operator_config(self) -> bool:
         """The client API key was rejected: maybe the operator rotated it."""
         if self._api_key_refreshed:
@@ -305,6 +345,8 @@ class PetraCoordinator(DataUpdateCoordinator[PetraData]):
             if isinstance(det.data, dict):
                 trip.apply_detail(det.data)
 
+        if self.router is not None:
+            await self._route(trips, now)
         persons, events = self.tracker.update(trips, now, self.known_persons)
         self._store.async_delay_save(functools.partial(self.tracker.export_state, now), 5)
         for ev in events:
@@ -325,6 +367,7 @@ class PetraCoordinator(DataUpdateCoordinator[PetraData]):
             schema_severity=worst(issues),
             schema_issues=current[:MAX_REPORTED_ISSUES],
             rate_limit_remaining=self.client.last_rate_limit.remaining,
+            routing_error=self._routing_error,
         )
 
     async def _async_update_data(self) -> PetraData:
