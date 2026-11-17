@@ -32,6 +32,8 @@ import aiohttp
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from custom_components.petra_tracker.core.eta import (  # noqa: E402
+    ARRIVED_RADIUS_M,
+    END_NEAR_DESTINATION_M,
     STRAIGHT_LINE,
     EtaParams,
     drive_minutes,
@@ -57,22 +59,52 @@ def load(path: Path):
         return None
 
 
-def actual_arrivals(list_dir: Path, book_ref: int) -> dict[str, datetime]:
-    """When the car really reached the pickup and the destination."""
-    out: dict[str, datetime] = {}
+def actual_arrivals(list_dir: Path, detail_dir: Path, book_ref: int) -> dict[str, tuple[datetime, str]]:
+    """When the car really reached the pickup and the destination.
+
+    Status changes are buttons the driver presses ("arrived" can come early, a trip
+    can be ended before the destination), so the GPS track is the ground truth:
+    the first fix within ARRIVED_RADIUS_M of the stop. Fallbacks: the "arrived"
+    press for the pickup; for the destination the end of the trip, but only if
+    it was ended near the destination (otherwise there is no ground truth).
+    """
+    out: dict[str, tuple[datetime, str]] = {}
+    last = None
+    for path in sorted(detail_dir.glob("*.json")):
+        data = load(path)
+        if isinstance(data, dict) and data.get("bookRefNo") == book_ref:
+            last = data
+    events, ended, started, pickup, dest, gps = [], None, None, None, None, []
+    if last is not None:
+        trip = parse_order(last)
+        trip.apply_detail(last)
+        pickup, dest, gps, ended = trip.pickup, trip.destination, trip.gps, trip.trip_ended
+        started = trip.trip_started
     for path in sorted(list_dir.glob("*.json")):
         data = load(path)
         for item in (data or {}).get("items", []) if isinstance(data, dict) else []:
-            if item.get("bookRefNo") != book_ref:
-                continue
-            trip = parse_order(item)
-            if trip is None:
-                continue
-            for ev in trip.events:
-                if ev.type == PERSON_EVENT_ARRIVED:
-                    out.setdefault("to_pickup", ev.time)
-            if trip.trip_ended:
-                out.setdefault("to_destination", trip.trip_ended)
+            if item.get("bookRefNo") == book_ref and (t := parse_order(item)) is not None:
+                events = t.events or events
+                ended = t.trip_ended or ended
+    if pickup is not None:
+        hit = next((g for g in gps if haversine_m(g, pickup) <= ARRIVED_RADIUS_M), None)
+        if hit is not None:
+            out["to_pickup"] = (hit.time, "gps")
+    if dest is not None:
+        # Only after the pickup: the car may pass the destination on its way there.
+        after = out.get("to_pickup", (started, ""))[0] if (started or "to_pickup" in out) else None
+        hit = next((g for g in gps if after is not None and g.time > after
+                    and haversine_m(g, dest) <= ARRIVED_RADIUS_M), None)
+        if hit is not None:
+            out["to_destination"] = (hit.time, "gps")
+    if "to_pickup" not in out:
+        press = next((e.time for e in events if e.type == PERSON_EVENT_ARRIVED), None)
+        if press:
+            out["to_pickup"] = (press, "button")
+    if "to_destination" not in out and ended and gps and dest is not None:
+        at_end = min(gps, key=lambda g: abs((g.time - ended).total_seconds()))
+        if haversine_m(at_end, dest) <= END_NEAR_DESTINATION_M:
+            out["to_destination"] = (ended, "trip end")
     return out
 
 
@@ -115,9 +147,9 @@ async def main() -> None:
     if not samples:
         sys.exit("no driving samples found (need detail snapshots with GPS while approaching/onboard)")
 
-    arrivals = actual_arrivals(args.list_dir, samples[0][4])
+    arrivals = actual_arrivals(args.list_dir, args.detail_dir, samples[0][4])
     print(f"samples: {len(samples)}; actual arrivals: "
-          + ", ".join(f"{k} {v:%H:%M:%S}" for k, v in sorted(arrivals.items())))
+          + (", ".join(f"{k} {t:%H:%M:%S} ({src})" for k, (t, src) in sorted(arrivals.items())) or "none"))
 
     errors: dict[tuple[str, str], list[float]] = {}
     async with aiohttp.ClientSession() as session:
@@ -129,7 +161,9 @@ async def main() -> None:
         print(f"\n{'time':8} {'leg':15} " + " ".join(f"{e[:14]:>14}" for e in engines) + "   actual")
         for now, leg, origin, dest, _ in samples:
             actual = arrivals.get(leg)
-            remaining = (actual - now).total_seconds() / 60 if actual else None
+            remaining = (actual[0] - now).total_seconds() / 60 if actual else None
+            if remaining is not None and remaining < 0:
+                continue  # sample after the (physical) arrival
             cells = []
             for e in engines:
                 provider = providers[e]

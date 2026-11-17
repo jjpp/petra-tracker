@@ -88,7 +88,8 @@ async def test_short_pause_announces_changes_long_pause_does_not(hass, aioclient
     frozen.tick(timedelta(hours=2))
     done = syn.order(combined="concluded", car_no=syn.CAR_NO, assigned=ASSIGNED,
                      started=syn.PICKUP_TIME, ended=syn.PICKUP_TIME + timedelta(minutes=12))
-    mock_api(aioclient_mock, syn.order_list(done))
+    mock_api(aioclient_mock, syn.order_list(done),
+             syn.detail(done, [(syn.PICKUP_TIME + timedelta(minutes=12), *syn.DESTINATION)]))
     await set_polling(hass, True)
     assert len(events) == 1
     assert hass.states.get(STATUS).state in ("finished", "idle")

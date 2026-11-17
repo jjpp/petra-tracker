@@ -172,3 +172,31 @@ async def test_words_missing_value_and_time_format_are_configurable(hass, setup_
         "Taxi – till Alex kl. 07.50",
         "API-ändring: inkompatibel",
     ]
+
+
+async def test_trip_ended_away_from_destination_message(hass, setup_blueprint):
+    notify, _ = await setup_blueprint()
+    await fire(hass, "state_changed", **state(
+        "finished", "onboard", ended_at_destination=False, end_distance_m=3204,
+        estimated_arrival="2030-01-15T14:16:30+00:00", distance_m=3204))
+    await fire(hass, "state_changed", **state(
+        "finished", "onboard", ended_at_destination=True, end_distance_m=120, distance_m=120))
+    assert [c.data["message"] for c in notify] == [
+        "Alex's trip was ended 3.2 km from the destination; expected around 15:16.",
+        "Alex has arrived.",
+    ]
+
+
+async def test_distance_placeholder_and_decimal_separator(hass, setup_blueprint):
+    notify, _ = await setup_blueprint(
+        msg_at_pickup="{child}: taxi says it's there ({distance} away)",
+        decimal_separator=",",
+    )
+    await fire(hass, "state_changed", **state("at_pickup", "approaching", distance_m=968))
+    await fire(hass, "state_changed", **state("at_pickup", "approaching", distance_m=1460))
+    await fire(hass, "state_changed", **state("at_pickup", "approaching", distance_m=None))
+    assert [c.data["message"] for c in notify] == [
+        "Alex: taxi says it's there (970 m away)",
+        "Alex: taxi says it's there (1,5 km away)",
+        "Alex: taxi says it's there (? away)",
+    ]

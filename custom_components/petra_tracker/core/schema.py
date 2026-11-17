@@ -20,6 +20,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from .models import ACTIVE_PHASES, phase_of
+
 CONTRACT_PATH = Path(__file__).with_name("contract.json")
 
 
@@ -158,7 +160,9 @@ class SchemaValidator:
             if isinstance(gps, list):
                 for j, fix in enumerate(gps):
                     self._object(fix, "gpsPosition", f"{path}.status.gpsPositions[{j}]")
-            elif detail:
+            elif detail and phase_of(item.get("combinedStatus"), status.get("state")) in ACTIVE_PHASES:
+                # Before a car is assigned (and after the trip) there is no live
+                # position; only a car on its way without one is unexpected.
                 self.issues.append(
                     SchemaIssue(
                         Severity.WARNING,

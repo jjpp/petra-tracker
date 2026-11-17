@@ -15,8 +15,8 @@ from typing import Any, Protocol
 
 import aiohttp
 
-from .eta import ARRIVED_RADIUS_M, STRAIGHT_LINE, eta_target, haversine_m
-from .models import LatLon, RoutedLeg, Trip
+from .eta import ARRIVED_RADIUS_M, STRAIGHT_LINE, Leg, eta_target, haversine_m
+from .models import LatLon, Phase, RoutedLeg, Trip
 
 OSRM = "osrm"
 OPENROUTESERVICE = "openrouteservice"
@@ -206,6 +206,9 @@ async def attach_route(
     trip (used by estimate_eta). Returns an error message, or None."""
     trip.route = None
     target = eta_target(trip, track_onboard)
+    if target is None and trip.phase is Phase.FINISHED and trip.destination is not None:
+        # Trip ended (possibly before the destination): estimate the rest of the ride.
+        target = Leg.TO_DESTINATION, trip.destination
     fix = trip.last_fix
     if target is None or fix is None:
         return None

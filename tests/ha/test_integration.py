@@ -98,7 +98,8 @@ async def test_trip_progress_updates_entities_and_fires_events(hass, aioclient_m
     frozen.move_to(syn.PICKUP_TIME + timedelta(minutes=12))
     done = syn.order(combined="concluded", car_no=syn.CAR_NO, assigned=ASSIGNED,
                      started=syn.PICKUP_TIME, ended=syn.PICKUP_TIME + timedelta(minutes=12))
-    mock_api(aioclient_mock, syn.order_list(done))
+    at_school = [(syn.PICKUP_TIME + timedelta(minutes=12), *syn.DESTINATION)]
+    mock_api(aioclient_mock, syn.order_list(done), syn.detail(done, at_school))
     await refresh(hass, entry)
     assert hass.states.get(STATUS).state == "finished"
     assert hass.states.get(ACTIVE).state == "off"
@@ -285,3 +286,35 @@ async def test_cold_start_after_pickup_time_is_silent(hass, aioclient_mock, free
     await refresh(hass, entry)
     assert late == []
     assert hass.states.get(STATUS).state == "scheduled"
+
+
+async def test_trip_ended_away_from_destination(hass, aioclient_mock, frozen):
+    started = syn.PICKUP_TIME + timedelta(minutes=1)
+    frozen.move_to(started)
+    onboard = syn.order(combined="personIn", state="customer", car_no=syn.CAR_NO, assigned=ASSIGNED,
+                        started=started, events=[(3, started), (0, started)])
+    mock_api(aioclient_mock, syn.order_list(onboard), syn.detail(onboard, [(started, *syn.PICKUP)]))
+    entry = await setup(hass)
+    events = async_capture_events(hass, EVENT_STATE_CHANGED)
+
+    ended = started + timedelta(minutes=2)  # driver ends the trip still at the pickup
+    frozen.move_to(ended + timedelta(seconds=15))
+    done = syn.order(combined="concluded", car_no=syn.CAR_NO, assigned=ASSIGNED, started=started,
+                     ended=ended, events=[(3, started), (0, started), (1, ended)])
+    mock_api(aioclient_mock, syn.order_list(done),
+             syn.detail(done, [(started, *syn.PICKUP), (ended, *syn.PICKUP)]))
+    await refresh(hass, entry)
+    [ev] = events
+    assert ev.data["new_status"] == "finished" and ev.data["ended_at_destination"] is False
+    assert ev.data["estimated_arrival"] and ev.data["eta_minutes"] > 0
+    attrs = hass.states.get(STATUS).attributes
+    assert attrs["ended_at_destination"] is False and attrs["end_distance_m"] > 2000
+
+    def detail_calls():
+        return sum("/orders/" in str(c[1]) and "/persons/" not in str(c[1]) for c in aioclient_mock.mock_calls)
+
+    before = detail_calls()
+    frozen.tick(timedelta(seconds=30))
+    await refresh(hass, entry)
+    assert detail_calls() == before  # the extra detail fetch happens once
+    assert hass.states.get(STATUS).attributes["ended_at_destination"] is False

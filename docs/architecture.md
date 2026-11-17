@@ -198,6 +198,13 @@ unavailable; on = immediate poll, silent if the pause exceeded 30 min.
 before ETA estimation; failures fall back to straight line. A small cache re-uses a route while the
 car moved < 150 m and the result is < 2 min old. `tools/compare_eta.py` compares engines on captures.
 
+**Driver-pressed statuses (observed in real trips):** "arrived" can be pressed ~1 km before the
+pickup; a trip can be ended at the pickup, 3 km before the destination, and GPS tracking stops at
+that moment. Hence: state events carry the car's distance to the relevant stop; for a just-finished
+trip the detail is fetched once more and the end position is compared with the destination
+(> 500 m -> `ended_at_destination: false` + estimated arrival); the ETA in AT_PICKUP keeps following
+the GPS until the car is within 60 m. The comparison tool uses GPS arrival as ground truth.
+
 ### Services & Options
 Services: `set_token`, `export_telemetry`, `force_poll`, `reauth` (follow-up).
 Options: poll cadences, pickup lead time, heartbeat interval, ETA-announce granularity,

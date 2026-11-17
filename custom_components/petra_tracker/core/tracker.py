@@ -7,11 +7,12 @@ merged in) and the current time; it returns a snapshot and the events to emit.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
-from .eta import Eta, EtaParams, estimate_eta
+from .eta import Eta, EtaParams, TripEnding, estimate_eta, trip_ending, waypoint_distance_m
 from .models import ACTIVE_PHASES, TERMINAL_PHASES, Phase, Trip
 
 EVENT_STATE_CHANGED = "state_changed"
@@ -43,6 +44,7 @@ class PersonState:
     phase: Phase | None  # None = idle (nothing today)
     eta: Eta | None
     next_pickup: datetime | None
+    ending: TripEnding | None = None  # for a finished trip: where/how it ended
 
 
 @dataclass
@@ -112,6 +114,18 @@ class TripTracker:
         self._mem = _Memory()
         self._warm = False  # suppress events for the very first snapshot (e.g. after restart)
         self.persons: dict[int, PersonState] = {}
+        self._endings: dict[int, TripEnding] = {}
+
+    def final_detail_candidates(self, trips: list[Trip]) -> list[Trip]:
+        """Trips that have just finished: fetch their detail once more, so the
+        last GPS fix tells where the trip really ended."""
+        return [
+            t
+            for t in trips
+            if t.phase is Phase.FINISHED
+            and t.book_ref not in self._endings
+            and self._mem.phase_by_trip.get(t.book_ref) in ACTIVE_PHASES
+        ]
 
     def update(
         self, trips: list[Trip], now: datetime, known_persons: dict[int, str | None] | None = None
@@ -127,6 +141,11 @@ class TripTracker:
             name = next((t.person_name for t in ptrips if t.person_name), None)
             if name is None and known_persons:
                 name = known_persons.get(pid)
+            for t in ptrips:
+                if t.phase is Phase.FINISHED and t.book_ref not in self._endings:
+                    ending = trip_ending(t, s.eta_params)
+                    if ending is not None:
+                        self._endings[t.book_ref] = ending
             trip = select_trip(ptrips, now, s)
             eta = estimate_eta(trip, now, s.eta_params, track_onboard=s.track_onboard) if trip else None
             persons[pid] = PersonState(
@@ -136,14 +155,17 @@ class TripTracker:
                 phase=trip.phase if trip else None,
                 eta=eta,
                 next_pickup=next_pickup(ptrips, now),
+                ending=self._endings.get(trip.book_ref) if trip and trip.phase is Phase.FINISHED else None,
             )
             for t in ptrips:
-                events.extend(self._phase_events(t, persons[pid] if t is trip else None, name))
+                events.extend(self._phase_events(t, persons[pid] if t is trip else None, name, now))
                 events.extend(self._late_events(t, name, now))
             if trip is not None:
                 events.extend(self._eta_events(trip, eta, name, now))
 
-        self._mem.prune({t.book_ref for t in trips})
+        refs = {t.book_ref for t in trips}
+        self._mem.prune(refs)
+        self._endings = {r: e for r, e in self._endings.items() if r in refs}
         self.persons = persons
         if not self._warm:
             # First snapshot without restored memory (fresh start, or memory too
@@ -199,7 +221,7 @@ class TripTracker:
         }
 
     def _phase_events(
-        self, trip: Trip, state: PersonState | None, name: str | None
+        self, trip: Trip, state: PersonState | None, name: str | None, now: datetime
     ) -> list[TrackerEvent]:
         old = self._mem.phase_by_trip.get(trip.book_ref)
         self._mem.phase_by_trip[trip.book_ref] = trip.phase
@@ -210,18 +232,26 @@ class TripTracker:
             # in motion (we might have missed its earlier transitions).
             return []
         eta = state.eta if state else None
-        return [
-            TrackerEvent(
-                EVENT_STATE_CHANGED,
-                {
-                    **self._base(trip, name),
-                    "old_status": old.value if old else None,
-                    "new_status": trip.phase.value,
-                    "raw_status": trip.combined_status,
-                    "eta_minutes": eta.minutes if eta else None,
-                },
-            )
-        ]
+        distance = waypoint_distance_m(trip)
+        data: dict[str, Any] = {
+            **self._base(trip, name),
+            "old_status": old.value if old else None,
+            "new_status": trip.phase.value,
+            "raw_status": trip.combined_status,
+            "eta_minutes": eta.minutes if eta else None,
+            # Car's last known distance to the stop of this phase: "arrived" may be
+            # pressed before the car is there.
+            "distance_m": round(distance) if distance is not None else None,
+        }
+        if trip.phase is Phase.FINISHED:
+            ending = self._endings.get(trip.book_ref)
+            data["ended_at_destination"] = ending.at_destination if ending else None
+            data["end_distance_m"] = round(ending.distance_m) if ending else None
+            arrival = ending.estimated_arrival if ending else None
+            data["estimated_arrival"] = arrival.isoformat() if arrival else None
+            if arrival is not None:
+                data["eta_minutes"] = max(0, math.ceil((arrival - now).total_seconds() / 60))
+        return [TrackerEvent(EVENT_STATE_CHANGED, data)]
 
     def _late_events(self, trip: Trip, name: str | None, now: datetime) -> list[TrackerEvent]:
         """Once per trip: still only booked shortly before (or after) pickup time."""

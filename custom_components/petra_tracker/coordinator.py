@@ -280,12 +280,16 @@ class PetraCoordinator(DataUpdateCoordinator[PetraData]):
                 },
             )
 
-    async def _route(self, trips: list[Trip], now: datetime) -> None:
+    def _detail_trips(self, trips: list[Trip]) -> list[Trip]:
+        active = trips_needing_detail(trips, self.track_onboard)
+        return active + [t for t in self.tracker.final_detail_candidates(trips) if t not in active]
+
+    async def _route(self, trips: list[Trip], detail_trips: list[Trip], now: datetime) -> None:
         """Road-route the active trips; on failure their ETA uses the straight line."""
         assert self.router is not None
         errors = [
             err
-            for trip in trips_needing_detail(trips, self.track_onboard)
+            for trip in detail_trips
             if (err := await attach_route(
                 trip, now, self.router, self.route_cache, track_onboard=self.track_onboard
             ))
@@ -333,7 +337,10 @@ class PetraCoordinator(DataUpdateCoordinator[PetraData]):
         trips = parse_order_list(res.data)
         await self._note_new_persons(trips)
 
-        for trip in trips_needing_detail(trips, self.track_onboard):
+        # Active trips, plus trips that just finished (once): their last GPS fix
+        # shows whether the trip was ended at the destination or before it.
+        detail_trips = self._detail_trips(trips)
+        for trip in detail_trips:
             try:
                 det = await self.client.order_detail(trip.book_ref)
             except (PetraTransientError, PetraEndpointError) as err:
@@ -346,7 +353,7 @@ class PetraCoordinator(DataUpdateCoordinator[PetraData]):
                 trip.apply_detail(det.data)
 
         if self.router is not None:
-            await self._route(trips, now)
+            await self._route(trips, detail_trips, now)
         persons, events = self.tracker.update(trips, now, self.known_persons)
         self._store.async_delay_save(functools.partial(self.tracker.export_state, now), 5)
         for ev in events:

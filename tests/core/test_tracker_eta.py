@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from custom_components.petra_tracker.core.eta import EtaParams, EtaSource, Leg, estimate_eta
 from custom_components.petra_tracker.core.models import Phase, parse_order, parse_order_list
@@ -303,3 +303,93 @@ def test_all_trip_events_carry_scheduled_pickup():
     assert events
     for _, e in events:
         assert e.data["scheduled_pickup"] == syn.PICKUP_TIME.isoformat()
+
+
+# -- driver-pressed statuses vs. where the car really is -------------------------
+
+def _onboard(at, lat, lon):
+    o = syn.order(combined="personIn", state="customer", car_no=syn.CAR_NO, assigned=ASSIGNED,
+                  started=at, events=[(3, at), (0, at)])
+    return o, [(at, lat, lon)]
+
+
+def _concluded(ended):
+    return syn.order(combined="concluded", car_no=syn.CAR_NO, assigned=ASSIGNED,
+                     started=STARTED, ended=ended, events=[(3, ARRIVED), (0, STARTED), (1, ended)])
+
+
+def _poll(tracker, order, gps, now, *, with_final_detail=True):
+    trips = parse_order_list(syn.order_list(order))
+    wanted = trips_needing_detail(trips, True) + (tracker.final_detail_candidates(trips) if with_final_detail else [])
+    for t in wanted:
+        t.apply_detail(syn.detail(order, gps))
+    return tracker.update(trips, now)
+
+
+def test_trip_ended_before_destination_is_reported_with_estimated_arrival():
+    tracker = warm_tracker()
+    o, gps = _onboard(STARTED, *syn.PICKUP)
+    _poll(tracker, o, gps, STARTED)
+    ended = STARTED + timedelta(minutes=2)
+    done = _concluded(ended)
+    # Car still at the pickup when the driver ended the trip (seen in real data).
+    assert tracker.final_detail_candidates(parse_order_list(syn.order_list(done)))
+    persons, evs = _poll(tracker, done, gps + [(ended, *syn.PICKUP)], ended + timedelta(seconds=20))
+    [ev] = [e for e in evs if e.type == EVENT_STATE_CHANGED]
+    d = ev.data
+    assert d["new_status"] == "finished" and d["ended_at_destination"] is False
+    assert 2000 < d["end_distance_m"] < 2400  # pickup -> destination is ~2.2 km
+    arrival = datetime.fromisoformat(d["estimated_arrival"])
+    assert ended + timedelta(minutes=5) < arrival < ended + timedelta(minutes=12)
+    assert d["eta_minutes"] >= 5
+    assert persons[syn.PERSON_ID].ending.at_destination is False
+    # Fetched once only.
+    assert tracker.final_detail_candidates(parse_order_list(syn.order_list(done))) == []
+
+
+def test_trip_ended_at_destination_is_normal():
+    tracker = warm_tracker()
+    o, gps = _onboard(STARTED, *syn.DESTINATION)
+    _poll(tracker, o, gps, STARTED)
+    persons, evs = _poll(tracker, _concluded(ENDED), [(ENDED, syn.DESTINATION[0] + 0.002, syn.DESTINATION[1])], ENDED)
+    [ev] = [e for e in evs if e.type == EVENT_STATE_CHANGED]
+    assert ev.data["ended_at_destination"] is True and ev.data["estimated_arrival"] is None
+    assert ev.data["end_distance_m"] < 500
+
+
+def test_trip_ending_unknown_without_final_gps():
+    tracker = warm_tracker()
+    o, gps = _onboard(STARTED, *syn.PICKUP)
+    _poll(tracker, o, gps, STARTED)
+    _, evs = _poll(tracker, _concluded(ENDED), [], ENDED, with_final_detail=False)
+    [ev] = [e for e in evs if e.type == EVENT_STATE_CHANGED]
+    assert ev.data["ended_at_destination"] is None and ev.data["end_distance_m"] is None
+
+
+def test_at_pickup_event_tells_how_far_the_car_still_is():
+    tracker = warm_tracker()
+    approach = syn.approach_track(ASSIGNED, 10)
+    o = syn.order(combined="arriving", car_no=syn.CAR_NO, assigned=ASSIGNED)
+    tracker.update(parse_order_list(syn.order_list(o)), ASSIGNED)
+    # Driver presses "arrived" while the car is still ~1 km away.
+    a = syn.order(combined="arrived", state="customer", car_no=syn.CAR_NO, assigned=ASSIGNED,
+                  events=[(3, ASSIGNED + timedelta(minutes=5))])
+    half_way = [g for g in approach if g[0] <= ASSIGNED + timedelta(minutes=5)]
+    _, evs = _poll(tracker, a, half_way, ASSIGNED + timedelta(minutes=5))
+    [ev] = [e for e in evs if e.type == EVENT_STATE_CHANGED]
+    assert ev.data["new_status"] == "at_pickup" and 900 < ev.data["distance_m"] < 1100
+
+
+def test_eta_keeps_counting_when_arrived_is_pressed_early():
+    a = syn.order(combined="arrived", state="customer", car_no=syn.CAR_NO, assigned=ASSIGNED,
+                  events=[(3, ASSIGNED + timedelta(minutes=5))])
+    track = syn.approach_track(ASSIGNED, 10)
+    early = parse_order(a)
+    early.apply_detail(syn.detail(a, [g for g in track if g[0] <= ASSIGNED + timedelta(minutes=5)]))
+    eta = estimate_eta(early, ASSIGNED + timedelta(minutes=5), EtaParams())
+    assert eta.source is EtaSource.GPS and eta.minutes >= 2 and eta.leg is Leg.TO_PICKUP
+    there = parse_order(a)
+    there.apply_detail(syn.detail(a, track))
+    assert estimate_eta(there, ASSIGNED + timedelta(minutes=10), EtaParams()).source is EtaSource.ARRIVED
+    nogps = parse_order(a)
+    assert estimate_eta(nogps, ASSIGNED, EtaParams()).minutes == 0

@@ -102,6 +102,8 @@ English). Placeholders are replaced with the trip's details, also in the title:
 | `{leg}` | `pickup` or `destination` |
 | `{status}` | trip status in words (`on its way`, `at pickup`, `on board`, …) |
 | `{car}` | car number |
+| `{distance}` | how far the car still is from the stop (`850 m`, `3.2 km`; decimal separator configurable) |
+| `{arrival_time}` | estimated arrival when a trip was ended before the destination |
 | `{pickup_time}` | scheduled pickup time, `HH:MM` in Home Assistant's time zone |
 | `{minutes}` | minutes before / after the pickup time ("no car assigned" messages) |
 | `{failed_minutes}`, `{days}`, `{severity}` | connection outage, token expiry, API change |
@@ -126,7 +128,7 @@ events include `person_name`, `book_ref`, `car_no` and `scheduled_pickup`.
 
 | Event | When | Data |
 |---|---|---|
-| `petra_tracker_state_changed` | trip status changes | `person_name`, `old_status`, `new_status`, `eta_minutes`, `car_no`, `scheduled_pickup`, … |
+| `petra_tracker_state_changed` | trip status changes | `person_name`, `old_status`, `new_status`, `eta_minutes`, `distance_m`, `car_no`, `scheduled_pickup`, …; for `finished` also `ended_at_destination`, `end_distance_m`, `estimated_arrival` |
 | `petra_tracker_car_not_assigned` | once per trip: still only *booked* *N* minutes before pickup (default 1) or after the pickup time | `person_name`, `scheduled_pickup`, `minutes_to_pickup` (negative = late), `pickup_passed` |
 | `petra_tracker_eta_changed` | ETA changed by ≥ the configured granularity (default 1 min) | `old_eta`, `new_eta`, `leg`, `status` |
 | `petra_tracker_heartbeat` | every *N* minutes during a trip (off by default) | `status`, `eta_minutes` |
@@ -205,6 +207,16 @@ with the actual arrival times.
   mode*); custom integrations are then not loaded.
 
 ### Behaviour notes
+
+- **Statuses are what the driver presses, not where the car is.** In real trips, "arrived" was
+  pressed about 1 km before the pickup, and a trip was ended right after pickup, 3 km before the
+  destination — and the operator stops tracking the car at that moment. So:
+  - the "car at pickup" event carries `distance_m` (use `{distance}` in the message), and the ETA
+    keeps counting down until the GPS shows the car really there;
+  - a finished trip is checked against the car's last position: more than 500 m from the
+    destination gives `ended_at_destination: false`, an `estimated_arrival` (from the last position,
+    using the chosen ETA engine) and, in the blueprint, the separate *Trip ended before the
+    destination* message instead of "has arrived".
 
 - **ETA**: straight-line distance × 1.4 at the assumed speed by default, which is rough on real
   roads; choose a routing engine for road-based ETAs (see above).

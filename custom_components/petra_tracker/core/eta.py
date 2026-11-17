@@ -65,8 +65,11 @@ def drive_minutes(distance_m: float, params: EtaParams) -> float:
 
 
 def eta_target(trip: Trip, track_onboard: bool = True) -> tuple[Leg, LatLon] | None:
-    """The next stop the car is driving to, if it is driving to one."""
-    if trip.phase is Phase.APPROACHING and trip.pickup is not None:
+    """The next stop the car is driving to, if it is driving to one.
+
+    AT_PICKUP counts too: drivers sometimes press "arrived" while still on the
+    way, so the ETA keeps following the GPS until the car is really there."""
+    if trip.phase in (Phase.APPROACHING, Phase.AT_PICKUP) and trip.pickup is not None:
         return Leg.TO_PICKUP, trip.pickup
     if trip.phase is Phase.ONBOARD and track_onboard and trip.destination is not None:
         return Leg.TO_DESTINATION, trip.destination
@@ -108,3 +111,50 @@ def estimate_eta(
         minutes = math.ceil((trip.scheduled_dropoff - now).total_seconds() / 60)
         return Eta(max(minutes, 0), Leg.TO_DESTINATION, EtaSource.SCHEDULE, approximate=pooled)
     return None
+
+
+# -- how far from the stop, and how did the trip end? --------------------------
+# Status changes are buttons the driver presses: "arrived" can be pressed well
+# before reaching the pickup, and a trip can be ended long before the
+# destination (the GPS track stops at that moment). These helpers make that
+# visible instead of trusting the status blindly.
+
+END_NEAR_DESTINATION_M = 500.0
+
+
+def waypoint_distance_m(trip: Trip) -> float | None:
+    """Car's last known distance to the stop that matters for the current phase."""
+    fix = trip.last_fix
+    if fix is None:
+        return None
+    if trip.phase in (Phase.APPROACHING, Phase.AT_PICKUP) and trip.pickup is not None:
+        return haversine_m(fix, trip.pickup)
+    if trip.phase in (Phase.ONBOARD, Phase.FINISHED) and trip.destination is not None:
+        return haversine_m(fix, trip.destination)
+    return None
+
+
+@dataclass(frozen=True)
+class TripEnding:
+    at_destination: bool
+    distance_m: float  # car's last known distance to the destination
+    estimated_arrival: datetime | None  # only when ended away from the destination
+    routing: str | None = None
+
+
+def trip_ending(trip: Trip, params: EtaParams) -> TripEnding | None:
+    """For a finished trip: did it end at the destination? If not, when will the
+    car probably get there (from its last fix, by route or straight line)?"""
+    fix = trip.last_fix
+    if trip.phase is not Phase.FINISHED or fix is None or trip.destination is None:
+        return None
+    dist = haversine_m(fix, trip.destination)
+    if dist <= END_NEAR_DESTINATION_M:
+        return TripEnding(True, dist, None)
+    route = trip.route
+    if route is not None and route.leg == Leg.TO_DESTINATION.value:
+        seconds, routing = route.duration_s, route.engine
+    else:
+        seconds, routing = drive_minutes(dist, params) * 60, STRAIGHT_LINE
+    start = trip.trip_ended or fix.time
+    return TripEnding(False, dist, start + timedelta(seconds=seconds), routing)

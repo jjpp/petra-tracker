@@ -97,3 +97,9 @@ def test_parse_order_list():
     assert round(trip.pickup.lat, 4) == syn.PICKUP[0]
     assert round(trip.destination.lon, 4) == syn.DESTINATION[1]
     assert [e.type for e in trip.events] == [3, 0]
+
+
+def test_detail_without_gps_is_normal_before_a_car_is_assigned():
+    assert SchemaValidator().order_detail(syn.order()) == []  # booked
+    done = syn.order(combined="concluded", car_no=syn.CAR_NO, assigned=syn.PICKUP_TIME)
+    assert SchemaValidator().order_detail(done) == []

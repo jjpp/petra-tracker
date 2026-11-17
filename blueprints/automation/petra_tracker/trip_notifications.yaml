@@ -104,6 +104,9 @@ blueprint:
         (also in the notification title): {child} first name, {eta} minutes to the next
         stop, {old_eta} previous ETA, {leg} "pickup" or "destination", {status} trip status
         in words, {car} car number, {pickup_time} scheduled pickup time (HH:MM),
+        {distance} how far the car still is from the stop (e.g. "850 m", "3.2 km";
+        drivers sometimes press "arrived" early), {arrival_time} estimated arrival when
+        a trip was ended before the destination,
         {minutes} minutes before/after the pickup time, {failed_minutes} minutes without
         connection, {days} days until the token expires, {severity} kind of API change.
         A placeholder without a value becomes the "missing value" text ("?"); words, the
@@ -128,6 +131,14 @@ blueprint:
         msg_finished:
           name: Arrived
           default: "{child} has arrived."
+          selector:
+            text:
+        msg_finished_away:
+          name: Trip ended before the destination
+          description: >-
+            The driver ended the trip while the car was still more than 500 m from the
+            destination. The car is not tracked after that; {arrival_time} is an estimate.
+          default: "{child}'s trip was ended {distance} from the destination; expected around {arrival_time}."
           selector:
             text:
         msg_cancelled:
@@ -234,6 +245,11 @@ blueprint:
           default: breaking
           selector:
             text:
+        decimal_separator:
+          name: Decimal separator in {distance}
+          default: "."
+          selector:
+            text:
         missing_value:
           name: Missing value
           description: Used when a placeholder has no value.
@@ -280,6 +296,7 @@ variables:
     at_pickup: !input msg_at_pickup
     onboard: !input msg_onboard
     finished: !input msg_finished
+    finished_away: !input msg_finished_away
     cancelled: !input msg_cancelled
     car_not_assigned: !input msg_car_not_assigned
     car_not_assigned_late: !input msg_car_not_assigned_late
@@ -289,7 +306,9 @@ variables:
     token_expiring: !input msg_token_expiring
     schema_drift: !input msg_schema_drift
   text_key: >-
-    {{ 'car_not_assigned_late' if kind == 'car_not_assigned' and ev.get('pickup_passed') else kind }}
+    {% if kind == 'car_not_assigned' and ev.get('pickup_passed') %}car_not_assigned_late
+    {%- elif kind == 'finished' and ev.get('ended_at_destination') == false %}finished_away
+    {%- else %}{{ kind }}{% endif %}
   words:
     status:
       scheduled: !input word_scheduled
@@ -306,6 +325,7 @@ variables:
       warning: !input word_severity_warning
       breaking: !input word_severity_breaking
   missing: !input missing_value
+  decimal_separator: !input decimal_separator
   time_format: !input time_format
   # Each placeholder's value; missing values become the "missing value" text.
   placeholders:
@@ -326,6 +346,14 @@ variables:
       {{ (ev.get('minutes_to_pickup') | abs) if ev.get('minutes_to_pickup') is not none else missing }}
     "{failed_minutes}": >-
       {{ ((ev.get('failed_for_s') / 60) | round(0) | int) if ev.get('failed_for_s') is not none else missing }}
+    "{distance}": >-
+      {% set m = ev.get('end_distance_m') if text_key == 'finished_away' else ev.get('distance_m') %}
+      {% if m is none %}{{ missing }}
+      {%- elif m < 1000 %}{{ (m / 10) | round(0) | int * 10 }} m
+      {%- else %}{{ ('%.1f' | format(m / 1000)) | replace('.', decimal_separator) }} km{% endif %}
+    "{arrival_time}": >-
+      {% set a = as_datetime(ev.get('estimated_arrival')) if ev.get('estimated_arrival') else none %}
+      {{ as_local(a).strftime(time_format) if a else missing }}
     "{days}": "{{ ev.get('days_left', missing) }}"
     "{severity}": >-
       {% set sev = ev.get('severity') %}

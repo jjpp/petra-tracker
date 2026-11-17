@@ -68,6 +68,20 @@ class TripStatusSensor(PetraPersonEntity, SensorEntity):
             "trip_ended": _iso(t.trip_ended),
             "coordinated_position": t.coordinated_position,
             "data_stale": not self.coordinator.data.connection_ok,
+            **self._ending(p),
+        }
+
+    @staticmethod
+    def _ending(p) -> dict[str, Any]:
+        """For a finished trip: was it ended at the destination? (Drivers sometimes
+        end it early; the car's position is no longer tracked after that.)"""
+        e = p.ending if p else None
+        if e is None:
+            return {}
+        return {
+            "ended_at_destination": e.at_destination,
+            "end_distance_m": round(e.distance_m),
+            "estimated_arrival": _iso(e.estimated_arrival),
         }
 
 
