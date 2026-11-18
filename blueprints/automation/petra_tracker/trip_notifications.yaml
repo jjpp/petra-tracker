@@ -136,8 +136,8 @@ blueprint:
         msg_finished_away:
           name: Trip ended before the destination
           description: >-
-            The driver ended the trip while the car was still more than 500 m from the
-            destination. The car is not tracked after that; {arrival_time} is an estimate.
+            The driver ended the trip while the car was still farther from the destination
+            than the integration's "counts as arrived" distance (default 1000 m). The car is not tracked after that; {arrival_time} is an estimate.
           default: "{child}'s trip was ended {distance} from the destination; expected around {arrival_time}."
           selector:
             text:

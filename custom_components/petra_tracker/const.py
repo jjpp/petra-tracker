@@ -29,6 +29,7 @@ OPT_TRACK_ONBOARD = "track_onboard"
 OPT_ASSUMED_SPEED_KMH = "assumed_speed_kmh"
 OPT_TELEMETRY = "telemetry"
 OPT_TELEMETRY_RETENTION_DAYS = "telemetry_retention_days"
+OPT_END_NEAR_DESTINATION_M = "end_near_destination_m"
 OPT_ROUTING = "routing"
 OPT_ROUTING_URL = "routing_url"
 OPT_ROUTING_API_KEY = "routing_api_key"
@@ -44,6 +45,7 @@ DEFAULT_OPTIONS: dict[str, int | float | bool] = {
     OPT_FAILURE_ALERT_MIN: 3,
     OPT_TRACK_ONBOARD: True,
     OPT_ASSUMED_SPEED_KMH: 25,
+    OPT_END_NEAR_DESTINATION_M: 1000,
     OPT_TELEMETRY: False,
     OPT_TELEMETRY_RETENTION_DAYS: 30,
     OPT_ROUTING: "straight_line",  # no external service unless the user picks one

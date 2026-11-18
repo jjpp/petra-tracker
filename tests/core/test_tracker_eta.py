@@ -393,3 +393,15 @@ def test_eta_keeps_counting_when_arrived_is_pressed_early():
     assert estimate_eta(there, ASSIGNED + timedelta(minutes=10), EtaParams()).source is EtaSource.ARRIVED
     nogps = parse_order(a)
     assert estimate_eta(nogps, ASSIGNED, EtaParams()).minutes == 0
+
+
+def test_ended_at_destination_distance_is_configurable():
+    seven_hundred_m_before = (syn.DESTINATION[0] + 700 / 111_200, syn.DESTINATION[1])
+    for near, expected in ((1000, True), (500, False)):
+        tracker = warm_tracker(TrackerSettings(end_near_destination_m=near))
+        o, gps = _onboard(STARTED, *syn.PICKUP)
+        _poll(tracker, o, gps, STARTED)
+        _, evs = _poll(tracker, _concluded(ENDED), [(ENDED, *seven_hundred_m_before)], ENDED)
+        [ev] = [e for e in evs if e.type == EVENT_STATE_CHANGED]
+        assert ev.data["ended_at_destination"] is expected, near
+        assert 650 < ev.data["end_distance_m"] < 750

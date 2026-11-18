@@ -328,3 +328,24 @@ async def test_reauth_is_requested_before_the_token_expires(hass, aioclient_mock
     assert any(f["context"]["source"] == "reauth" and f["context"].get("entry_id") == entry.entry_id
                for f in flows)
     assert hass.states.get(STATUS).state != "unavailable"  # still working meanwhile
+
+
+async def test_ended_near_destination_option(hass, aioclient_mock, frozen):
+    from custom_components.petra_tracker.const import OPT_END_NEAR_DESTINATION_M
+
+    started = syn.PICKUP_TIME + timedelta(minutes=1)
+    frozen.move_to(started)
+    onboard = syn.order(combined="personIn", state="customer", car_no=syn.CAR_NO, assigned=ASSIGNED,
+                        started=started, events=[(3, started), (0, started)])
+    mock_api(aioclient_mock, syn.order_list(onboard), syn.detail(onboard, [(started, *syn.PICKUP)]))
+    entry = await setup(hass, **{OPT_END_NEAR_DESTINATION_M: 300})
+    events = async_capture_events(hass, EVENT_STATE_CHANGED)
+    ended = started + timedelta(minutes=8)
+    frozen.move_to(ended + timedelta(seconds=10))
+    done = syn.order(combined="concluded", car_no=syn.CAR_NO, assigned=ASSIGNED, started=started,
+                     ended=ended, events=[(3, started), (0, started), (1, ended)])
+    before_school = (syn.DESTINATION[0] + 500 / 111_200, syn.DESTINATION[1])  # 500 m away
+    mock_api(aioclient_mock, syn.order_list(done), syn.detail(done, [(ended, *before_school)]))
+    await refresh(hass, entry)
+    [ev] = events
+    assert ev.data["ended_at_destination"] is False  # 500 m > configured 300 m

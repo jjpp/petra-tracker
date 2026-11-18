@@ -38,6 +38,7 @@ from .const import (
     LOGGER,
     OPT_ACTIVE_INTERVAL_S,
     OPT_ASSUMED_SPEED_KMH,
+    OPT_END_NEAR_DESTINATION_M,
     OPT_ETA_GRANULARITY_MIN,
     OPT_FAILURE_ALERT_MIN,
     OPT_HEARTBEAT_MIN,
@@ -324,6 +325,7 @@ OPTION_SELECTORS = {
     OPT_LATE_WARNING_MIN: _number(0, 60, 1, "min"),
     OPT_FAILURE_ALERT_MIN: _number(1, 120, 1, "min"),
     OPT_TRACK_ONBOARD: BooleanSelector(),
+    OPT_END_NEAR_DESTINATION_M: _number(100, 5000, 50, "m"),
     OPT_ASSUMED_SPEED_KMH: _number(5, 100, 1, "km/h"),
     OPT_ROUTING: SelectSelector(
         SelectSelectorConfig(

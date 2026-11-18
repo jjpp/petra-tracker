@@ -119,7 +119,10 @@ def estimate_eta(
 # destination (the GPS track stops at that moment). These helpers make that
 # visible instead of trusting the status blindly.
 
-END_NEAR_DESTINATION_M = 500.0
+# Default: a trip ended within this distance of the destination counts as
+# arrived. Drivers were seen ending the trip 300-550 m before the school while
+# still driving there, and once 3.2 km before the destination.
+END_NEAR_DESTINATION_M = 1000.0
 
 
 def waypoint_distance_m(trip: Trip) -> float | None:
@@ -142,14 +145,16 @@ class TripEnding:
     routing: str | None = None
 
 
-def trip_ending(trip: Trip, params: EtaParams) -> TripEnding | None:
+def trip_ending(
+    trip: Trip, params: EtaParams, near_m: float = END_NEAR_DESTINATION_M
+) -> TripEnding | None:
     """For a finished trip: did it end at the destination? If not, when will the
     car probably get there (from its last fix, by route or straight line)?"""
     fix = trip.last_fix
     if trip.phase is not Phase.FINISHED or fix is None or trip.destination is None:
         return None
     dist = haversine_m(fix, trip.destination)
-    if dist <= END_NEAR_DESTINATION_M:
+    if dist <= near_m:
         return TripEnding(True, dist, None)
     route = trip.route
     if route is not None and route.leg == Leg.TO_DESTINATION.value:

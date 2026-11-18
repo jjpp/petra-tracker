@@ -10,6 +10,8 @@ and compares the predicted arrival with the actual one (car arrived at pickup
 Captures contain personal data: keep them outside this repository.
 NOTE: engines other than straight_line receive the car's positions and the
 trip's pickup/destination coordinates.
+NOTE: Waze answers with *current* live traffic, not the traffic at the time of the
+recorded trip, so its replayed results vary between runs and are indicative only.
 
 Usage:
   python tools/compare_eta.py --list-dir CAP/list --detail-dir CAP/detail \
@@ -59,7 +61,9 @@ def load(path: Path):
         return None
 
 
-def actual_arrivals(list_dir: Path, detail_dir: Path, book_ref: int) -> dict[str, tuple[datetime, str]]:
+def actual_arrivals(
+    list_dir: Path, detail_dir: Path, book_ref: int, end_near_m: float = END_NEAR_DESTINATION_M
+) -> dict[str, tuple[datetime, str]]:
     """When the car really reached the pickup and the destination.
 
     Status changes are buttons the driver presses ("arrived" can come early, a trip
@@ -103,7 +107,7 @@ def actual_arrivals(list_dir: Path, detail_dir: Path, book_ref: int) -> dict[str
             out["to_pickup"] = (press, "button")
     if "to_destination" not in out and ended and gps and dest is not None:
         at_end = min(gps, key=lambda g: abs((g.time - ended).total_seconds()))
-        if haversine_m(at_end, dest) <= END_NEAR_DESTINATION_M:
+        if haversine_m(at_end, dest) <= end_near_m:
             out["to_destination"] = (ended, "trip end")
     return out
 
@@ -119,6 +123,8 @@ async def main() -> None:
     ap.add_argument("--waze-region", default="EU")
     ap.add_argument("--speed", type=float, default=25.0, help="assumed km/h for straight_line")
     ap.add_argument("--every", type=int, default=60, help="at most one sample per N seconds")
+    ap.add_argument("--end-near", type=float, default=END_NEAR_DESTINATION_M,
+                    help="a trip ended within this many metres of the destination counts as arrived")
     args = ap.parse_args()
     engines = [e.strip() for e in args.engines.split(",") if e.strip()]
 
@@ -147,7 +153,7 @@ async def main() -> None:
     if not samples:
         sys.exit("no driving samples found (need detail snapshots with GPS while approaching/onboard)")
 
-    arrivals = actual_arrivals(args.list_dir, args.detail_dir, samples[0][4])
+    arrivals = actual_arrivals(args.list_dir, args.detail_dir, samples[0][4], args.end_near)
     print(f"samples: {len(samples)}; actual arrivals: "
           + (", ".join(f"{k} {t:%H:%M:%S} ({src})" for k, (t, src) in sorted(arrivals.items())) or "none"))
 

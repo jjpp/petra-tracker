@@ -12,7 +12,15 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
-from .eta import Eta, EtaParams, TripEnding, estimate_eta, trip_ending, waypoint_distance_m
+from .eta import (
+    END_NEAR_DESTINATION_M,
+    Eta,
+    EtaParams,
+    TripEnding,
+    estimate_eta,
+    trip_ending,
+    waypoint_distance_m,
+)
 from .models import ACTIVE_PHASES, TERMINAL_PHASES, Phase, Trip
 
 EVENT_STATE_CHANGED = "state_changed"
@@ -31,6 +39,8 @@ class TrackerSettings:
     # Warn when a trip is still only booked this long before pickup (None = off).
     late_warning_lead: timedelta | None = timedelta(minutes=1)
     track_onboard: bool = True
+    # A trip ended within this distance of the destination counts as arrived.
+    end_near_destination_m: float = END_NEAR_DESTINATION_M
     show_finished_for: timedelta = timedelta(minutes=15)
     stale_booking_after: timedelta = timedelta(hours=3)
     eta_params: EtaParams = field(default_factory=EtaParams)
@@ -143,7 +153,7 @@ class TripTracker:
                 name = known_persons.get(pid)
             for t in ptrips:
                 if t.phase is Phase.FINISHED and t.book_ref not in self._endings:
-                    ending = trip_ending(t, s.eta_params)
+                    ending = trip_ending(t, s.eta_params, s.end_near_destination_m)
                     if ending is not None:
                         self._endings[t.book_ref] = ending
             trip = select_trip(ptrips, now, s)

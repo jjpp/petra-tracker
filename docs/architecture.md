@@ -202,7 +202,7 @@ car moved < 150 m and the result is < 2 min old. `tools/compare_eta.py` compares
 pickup; a trip can be ended at the pickup, 3 km before the destination, and GPS tracking stops at
 that moment. Hence: state events carry the car's distance to the relevant stop; for a just-finished
 trip the detail is fetched once more and the end position is compared with the destination
-(> 500 m -> `ended_at_destination: false` + estimated arrival); the ETA in AT_PICKUP keeps following
+(> option `end_near_destination_m`, default 1000 m -> `ended_at_destination: false` + estimated arrival); the ETA in AT_PICKUP keeps following
 the GPS until the car is within 60 m. The comparison tool uses GPS arrival as ground truth.
 
 **Login (implemented):** `POST authentication/login {username, password, language: "en-GB"}` ->

@@ -32,6 +32,7 @@ from .const import (
     LOGGER,
     OPT_ACTIVE_INTERVAL_S,
     OPT_ASSUMED_SPEED_KMH,
+    OPT_END_NEAR_DESTINATION_M,
     OPT_ETA_GRANULARITY_MIN,
     OPT_FAILURE_ALERT_MIN,
     OPT_HEARTBEAT_MIN,
@@ -144,6 +145,7 @@ class PetraCoordinator(DataUpdateCoordinator[PetraData]):
                 heartbeat_interval=timedelta(minutes=heartbeat) if heartbeat else None,
                 late_warning_lead=timedelta(minutes=_opt(entry, OPT_LATE_WARNING_MIN)),
                 track_onboard=self.track_onboard,
+                end_near_destination_m=float(_opt(entry, OPT_END_NEAR_DESTINATION_M)),
                 eta_params=EtaParams(assumed_speed_kmh=float(_opt(entry, OPT_ASSUMED_SPEED_KMH))),
             )
         )

@@ -220,8 +220,9 @@ with the actual arrival times.
   destination — and the operator stops tracking the car at that moment. So:
   - the "car at pickup" event carries `distance_m` (use `{distance}` in the message), and the ETA
     keeps counting down until the GPS shows the car really there;
-  - a finished trip is checked against the car's last position: more than 500 m from the
-    destination gives `ended_at_destination: false`, an `estimated_arrival` (from the last position,
+  - a finished trip is checked against the car's last position: farther from the destination
+    than the *counts as arrived* distance (option, default 1000 m — drivers were seen ending the
+    trip 300–550 m before the school while still driving there) gives `ended_at_destination: false`, an `estimated_arrival` (from the last position,
     using the chosen ETA engine) and, in the blueprint, the separate *Trip ended before the
     destination* message instead of "has arrived".
 
