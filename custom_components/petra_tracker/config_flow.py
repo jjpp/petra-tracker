@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Config flow: pick the operator country, paste a token, discover the children."""
+"""Config flow: operator country, then username/password + SMS code (or a pasted
+token); the children are discovered from their bookings."""
 
 from __future__ import annotations
 
@@ -7,7 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFlow
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
@@ -31,6 +32,7 @@ from .const import (
     CONF_PERSONS,
     CONF_TOKEN,
     CONF_USER_ID,
+    CONF_USERNAME,
     DEFAULT_OPTIONS,
     DOMAIN,
     LOGGER,
@@ -54,16 +56,34 @@ from .const import (
 from .core import jwt
 from .core.client import (
     COUNTRIES,
+    OperatorConfig,
     PetraApiKeyError,
     PetraAuthError,
     PetraClient,
     PetraError,
+    PetraLoginError,
+    PetraOtpError,
     discover_persons,
     fetch_operator_config,
+    login,
+    otp_digits,
+    verify_2fa,
 )
 from .core.routing import ENGINES, OPENROUTESERVICE, WAZE_REGIONS
 
 TOKEN_SELECTOR = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
+USERNAME_SELECTOR = TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT, autocomplete="username"))
+PASSWORD_SELECTOR = TextSelector(
+    TextSelectorConfig(type=TextSelectorType.PASSWORD, autocomplete="current-password")
+)
+CODE_SELECTOR = TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT, autocomplete="one-time-code"))
+
+CONF_AUTH_METHOD = "auth_method"
+CONF_PASSWORD = "password"
+CONF_CODE = "code"
+CONF_RESEND = "resend"
+AUTH_LOGIN = "login"
+AUTH_TOKEN = "token"
 
 
 def _check_token(raw: str) -> tuple[str, jwt.TokenInfo | None, str | None]:
@@ -79,100 +99,211 @@ def _check_token(raw: str) -> tuple[str, jwt.TokenInfo | None, str | None]:
 
 
 class PetraConfigFlow(ConfigFlow, domain=DOMAIN):
+    """Set-up and re-authentication share the steps login -> code (or token)."""
+
     VERSION = 1
+
+    def __init__(self) -> None:
+        self._op: OperatorConfig | None = None
+        self._username: str | None = None
+        self._password: str | None = None  # in memory only while this dialog is open
+        self._user_id: int | None = None
+        self._direct_token: str | None = None  # account without two-factor login
 
     @staticmethod
     @callback
     def async_get_options_flow(config_entry) -> PetraOptionsFlow:
         return PetraOptionsFlow()
 
+    @property
+    def _session(self):
+        return async_get_clientsession(self.hass)
+
+    # -- first set-up ------------------------------------------------------------
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:
-            token, info, error = _check_token(user_input[CONF_TOKEN])
-            if error:
-                errors[CONF_TOKEN] = error
+            try:
+                self._op = await fetch_operator_config(self._session, user_input[CONF_COUNTRY])
+            except PetraError as err:
+                LOGGER.debug("Operator config failed: %s", err)
+                errors["base"] = "cannot_connect"
             else:
-                assert info is not None
-                session = async_get_clientsession(self.hass)
-                try:
-                    op = await fetch_operator_config(session, user_input[CONF_COUNTRY])
-                    client = PetraClient(session, op.base_url, op.api_key, token)
-                    persons = await discover_persons(
-                        client, info.user_id, dt_util.utcnow(), PERSON_DISCOVERY_DAYS
-                    )
-                except PetraAuthError:
-                    errors["base"] = "invalid_auth"
-                except PetraApiKeyError:
-                    errors["base"] = "operator_config"
-                except PetraError as err:
-                    LOGGER.debug("Setup failed: %s", err)
-                    errors["base"] = "cannot_connect"
-                else:
-                    await self.async_set_unique_id(f"{op.base_url}#{info.user_id}")
-                    self._abort_if_unique_id_configured()
-                    names = sorted(n for n in persons.values() if n)
-                    title = "Petra trips" + (f" ({', '.join(names)})" if names else "")
-                    return self.async_create_entry(
-                        title=title,
-                        data={
-                            CONF_COUNTRY: user_input[CONF_COUNTRY],
-                            CONF_BASE_URL: op.base_url,
-                            CONF_API_KEY: op.api_key,
-                            CONF_TOKEN: token,
-                            CONF_USER_ID: info.user_id,
-                            CONF_PERSONS: {str(k): v for k, v in persons.items()},
-                        },
-                        options=dict(DEFAULT_OPTIONS),
-                    )
-
+                if user_input.get(CONF_AUTH_METHOD) == AUTH_TOKEN:
+                    return await self.async_step_token()
+                return await self.async_step_login()
         schema = vol.Schema(
             {
                 vol.Required(CONF_COUNTRY, default="se"): SelectSelector(
                     SelectSelectorConfig(
-                        options=list(COUNTRIES),
-                        translation_key="country",
-                        mode=SelectSelectorMode.DROPDOWN,
+                        options=list(COUNTRIES), translation_key="country", mode=SelectSelectorMode.DROPDOWN
                     )
                 ),
-                vol.Required(CONF_TOKEN): TOKEN_SELECTOR,
+                vol.Required(CONF_AUTH_METHOD, default=AUTH_LOGIN): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[AUTH_LOGIN, AUTH_TOKEN], translation_key="auth_method",
+                        mode=SelectSelectorMode.LIST,
+                    )
+                ),
             }
         )
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
 
+    # -- re-authentication ---------------------------------------------------------
     async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
-        return await self.async_step_reauth_confirm()
-
-    async def async_step_reauth_confirm(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
         entry = self._get_reauth_entry()
+        self._op = OperatorConfig(
+            country=entry.data[CONF_COUNTRY],
+            base_url=entry.data[CONF_BASE_URL],
+            api_key=entry.data[CONF_API_KEY],
+        )
+        self._username = entry.data.get(CONF_USERNAME)
+        return self.async_show_menu(step_id="reauth", menu_options=[AUTH_LOGIN, AUTH_TOKEN])
+
+    # -- shared steps ------------------------------------------------------------------
+    async def async_step_login(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:
-            token, info, error = _check_token(user_input[CONF_TOKEN])
-            if error:
-                errors[CONF_TOKEN] = error
-            elif info is None or info.user_id != entry.data[CONF_USER_ID]:
-                errors[CONF_TOKEN] = "wrong_user"
+            self._username = user_input[CONF_USERNAME].strip()
+            self._password = user_input[CONF_PASSWORD]
+            error = await self._send_code()
+            if error is None:
+                if self._direct_token:
+                    return await self._finish_or_form("login", self._direct_token)
+                return await self.async_step_code()
+            errors["base"] = error
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_USERNAME, default=self._username or ""): USERNAME_SELECTOR,
+                vol.Required(CONF_PASSWORD): PASSWORD_SELECTOR,
+            }
+        )
+        return self.async_show_form(step_id="login", data_schema=schema, errors=errors)
+
+    async def _send_code(self) -> str | None:
+        """POST login (the server sends an SMS). Returns an error key or None."""
+        assert self._op is not None and self._username is not None and self._password is not None
+        try:
+            start = await login(
+                self._session, self._op.base_url, self._op.api_key, self._username, self._password
+            )
+        except PetraLoginError as err:
+            LOGGER.debug("Login rejected: %s", err)
+            return "invalid_credentials"
+        except PetraApiKeyError:
+            return "operator_config"
+        except PetraError as err:
+            LOGGER.debug("Login failed: %s", err)
+            return "cannot_connect"
+        self._user_id = start.user_id
+        self._direct_token = start.token
+        return None
+
+    async def async_step_code(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if user_input.get(CONF_RESEND):
+                errors["base"] = await self._send_code() or "code_resent"
+            elif otp_digits(user_input.get(CONF_CODE, "")) is None:
+                errors[CONF_CODE] = "code_format"
             else:
-                session = async_get_clientsession(self.hass)
-                client = PetraClient(
-                    session, entry.data[CONF_BASE_URL], entry.data[CONF_API_KEY], token
-                )
+                assert self._op is not None and isinstance(self._user_id, int)
                 try:
-                    await discover_persons(client, info.user_id, dt_util.utcnow(), 1)
-                except PetraAuthError:
-                    errors["base"] = "invalid_auth"
-                except PetraError:
+                    token = await verify_2fa(
+                        self._session, self._op.base_url, self._op.api_key, self._user_id,
+                        user_input[CONF_CODE],
+                    )
+                except PetraOtpError as err:
+                    LOGGER.debug("Code rejected: %s", err)
+                    errors[CONF_CODE] = "invalid_code"
+                except PetraError as err:
+                    LOGGER.debug("Code verification failed: %s", err)
                     errors["base"] = "cannot_connect"
                 else:
-                    return self.async_update_reload_and_abort(
-                        entry, data_updates={CONF_TOKEN: token}
-                    )
+                    return await self._finish_or_form("code", token)
+        schema = vol.Schema(
+            {
+                vol.Optional(CONF_CODE, default=""): CODE_SELECTOR,
+                vol.Optional(CONF_RESEND, default=False): BooleanSelector(),
+            }
+        )
+        return self.async_show_form(step_id="code", data_schema=schema, errors=errors)
+
+    async def async_step_token(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            return await self._finish_or_form("token", user_input[CONF_TOKEN])
         return self.async_show_form(
-            step_id="reauth_confirm",
+            step_id="token",
             data_schema=vol.Schema({vol.Required(CONF_TOKEN): TOKEN_SELECTOR}),
             errors=errors,
+        )
+
+    # -- completion ----------------------------------------------------------------------
+    async def _finish_or_form(self, step_id: str, raw_token: str) -> ConfigFlowResult:
+        """Validate the token and create/update the entry; on failure show the step again."""
+        result = await self._finish(raw_token)
+        if not isinstance(result, str):
+            return result
+        field = CONF_TOKEN if step_id == "token" and result in ("invalid_token", "token_expired") else "base"
+        if step_id == "token":
+            schema = vol.Schema({vol.Required(CONF_TOKEN): TOKEN_SELECTOR})
+        elif step_id == "code":
+            schema = vol.Schema(
+                {vol.Optional(CONF_CODE, default=""): CODE_SELECTOR,
+                 vol.Optional(CONF_RESEND, default=False): BooleanSelector()}
+            )
+        else:
+            schema = vol.Schema(
+                {vol.Required(CONF_USERNAME, default=self._username or ""): USERNAME_SELECTOR,
+                 vol.Required(CONF_PASSWORD): PASSWORD_SELECTOR}
+            )
+        return self.async_show_form(step_id=step_id, data_schema=schema, errors={field: result})
+
+    async def _finish(self, raw_token: str) -> ConfigFlowResult | str:
+        token, info, error = _check_token(raw_token)
+        if error:
+            return error
+        assert info is not None and self._op is not None
+        reauth = self.source == SOURCE_REAUTH
+        if reauth and info.user_id != self._get_reauth_entry().data[CONF_USER_ID]:
+            return "wrong_user"
+        client = PetraClient(self._session, self._op.base_url, self._op.api_key, token)
+        try:
+            persons = await discover_persons(
+                client, info.user_id, dt_util.utcnow(), 1 if reauth else PERSON_DISCOVERY_DAYS
+            )
+        except PetraAuthError:
+            return "invalid_auth"
+        except PetraApiKeyError:
+            return "operator_config"
+        except PetraError as err:
+            LOGGER.debug("Setup failed: %s", err)
+            return "cannot_connect"
+        self._password = None
+        if reauth:
+            updates: dict[str, Any] = {CONF_TOKEN: token}
+            if self._username:
+                updates[CONF_USERNAME] = self._username
+            return self.async_update_reload_and_abort(self._get_reauth_entry(), data_updates=updates)
+
+        await self.async_set_unique_id(f"{self._op.base_url}#{info.user_id}")
+        self._abort_if_unique_id_configured()
+        names = sorted(n for n in persons.values() if n)
+        data: dict[str, Any] = {
+            CONF_COUNTRY: self._op.country,
+            CONF_BASE_URL: self._op.base_url,
+            CONF_API_KEY: self._op.api_key,
+            CONF_TOKEN: token,
+            CONF_USER_ID: info.user_id,
+            CONF_PERSONS: {str(k): v for k, v in persons.items()},
+        }
+        if self._username:
+            data[CONF_USERNAME] = self._username
+        return self.async_create_entry(
+            title="Petra trips" + (f" ({', '.join(names)})" if names else ""),
+            data=data,
+            options=dict(DEFAULT_OPTIONS),
         )
 
 

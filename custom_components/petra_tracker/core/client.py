@@ -207,3 +207,122 @@ async def discover_persons(
         if persons.get(item["personID"]) is None:
             persons[item["personID"]] = name
     return persons
+
+
+# -- login: username/password + SMS one-time code -------------------------------
+# Observed flow (web client): POST authentication/login {username, password,
+# language} -> {success, data: {userId}, message} and an SMS is sent;
+# POST authentication/verify2factor {userId, otp (number), language} ->
+# {success, data: {token, ...profile}}. Only the token is used; the password and
+# the code are never stored or logged.
+
+LOGIN_LANGUAGE = "en-GB"  # as sent by the web client
+VERIFY_LANGUAGE = "EN"
+
+
+class PetraLoginError(PetraError):
+    """Username/password rejected (or the server refused the login)."""
+
+
+class PetraOtpError(PetraError):
+    """The one-time code was rejected (wrong or expired)."""
+
+
+@dataclass(frozen=True)
+class LoginStart:
+    user_id: int | None  # needed for the code step
+    token: str | None  # set if the account does not use two-factor login
+    message: str | None
+
+
+def _server_message(data: Any, text: str) -> str:
+    if isinstance(data, dict):
+        for key in ("message", "error"):
+            if isinstance(data.get(key), str) and data[key].strip():
+                return data[key].strip()[:200]
+    return text[:200]
+
+
+async def _post_json(
+    session: aiohttp.ClientSession, url: str, api_key: str, body: dict[str, Any]
+) -> tuple[int, Any, str]:
+    headers = {
+        "apiKey": api_key,
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/plain, */*",
+    }
+    try:
+        async with session.post(url, json=body, headers=headers, timeout=REQUEST_TIMEOUT) as resp:
+            status, text = resp.status, await resp.text()
+            retry_after = resp.headers.get("Retry-After")
+    except (aiohttp.ClientError, TimeoutError) as err:
+        # Note: never include the request body (password/code) in errors.
+        raise PetraTransientError(f"request failed: {type(err).__name__}") from err
+    if status == 429:
+        delay = timedelta(seconds=int(retry_after)) if retry_after and retry_after.isdigit() else None
+        raise PetraRateLimited(delay)
+    if status >= 500:
+        raise PetraTransientError(f"HTTP {status}")
+    if status == 403 and "api key" in text.lower():
+        raise PetraApiKeyError(text[:200])
+    try:
+        data = json.loads(text) if text else None
+    except ValueError:
+        data = None
+    return status, data, text
+
+
+def _succeeded(status: int, data: Any) -> bool:
+    return 200 <= status < 300 and isinstance(data, dict) and data.get("success") is True
+
+
+async def login(
+    session: aiohttp.ClientSession, base_url: str, api_key: str, username: str, password: str
+) -> LoginStart:
+    """Start a login. Normally the server then sends an SMS code (see verify_2fa)."""
+    base = base_url if base_url.endswith("/") else base_url + "/"
+    status, data, text = await _post_json(
+        session,
+        base + "authentication/login",
+        api_key,
+        {"username": username.strip(), "password": password, "language": LOGIN_LANGUAGE},
+    )
+    if not _succeeded(status, data):
+        raise PetraLoginError(_server_message(data, f"HTTP {status}"))
+    payload = data.get("data") if isinstance(data.get("data"), dict) else {}
+    token = payload.get("token") if isinstance(payload.get("token"), str) and payload["token"] else None
+    user_id = payload.get("userId") if isinstance(payload.get("userId"), int) else None
+    if token is None and user_id is None:
+        raise PetraEndpointError("login answer has neither userId nor token")
+    return LoginStart(user_id=user_id, token=normalise_token(token) if token else None,
+                      message=data.get("message") if isinstance(data.get("message"), str) else None)
+
+
+def otp_digits(code: str) -> str | None:
+    """Normalise a typed code ('123 456', '123-456') to digits, or None if invalid."""
+    digits = "".join(ch for ch in code if not ch.isspace() and ch != "-")
+    return digits if digits.isdigit() and 4 <= len(digits) <= 8 else None
+
+
+async def verify_2fa(
+    session: aiohttp.ClientSession, base_url: str, api_key: str, user_id: int, code: str
+) -> str:
+    """Finish the login with the SMS code; returns the API token (JWT)."""
+    digits = otp_digits(code)
+    if digits is None:
+        raise PetraOtpError("the code must be digits")
+    base = base_url if base_url.endswith("/") else base_url + "/"
+    status, data, _text = await _post_json(
+        session,
+        base + "authentication/verify2factor",
+        api_key,
+        # The web client sends the code as a number.
+        {"userId": user_id, "otp": int(digits), "language": VERIFY_LANGUAGE},
+    )
+    if not _succeeded(status, data):
+        raise PetraOtpError(_server_message(data, f"HTTP {status}"))
+    payload = data.get("data") if isinstance(data.get("data"), dict) else {}
+    token = payload.get("token")
+    if not isinstance(token, str) or not token:
+        raise PetraEndpointError("verify2factor answer without token")
+    return normalise_token(token)

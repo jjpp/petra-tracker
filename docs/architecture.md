@@ -205,6 +205,12 @@ trip the detail is fetched once more and the end position is compared with the d
 (> 500 m -> `ended_at_destination: false` + estimated arrival); the ETA in AT_PICKUP keeps following
 the GPS until the car is within 60 m. The comparison tool uses GPS arrival as ground truth.
 
+**Login (implemented):** `POST authentication/login {username, password, language: "en-GB"}` ->
+`{success, data: {userId}}` and an SMS is sent; `POST authentication/verify2factor {userId, otp
+(number), language: "EN"}` -> `{success, data: {token, profile...}}`. Only the token is used; the
+password is kept in memory only during the dialog, the username is stored to pre-fill re-login.
+Re-authentication is started automatically 3 days before the token expires.
+
 ### Services & Options
 Services: `set_token`, `export_telemetry`, `force_poll`, `reauth` (follow-up).
 Options: poll cadences, pickup lead time, heartbeat interval, ETA-announce granularity,

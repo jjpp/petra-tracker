@@ -3,27 +3,55 @@
     "step": {
       "user": {
         "title": "Petra trip tracker",
-        "description": "Unofficial integration for school/service transport trips booked through the Petra platform (e.g. Cabonline Serviceresor / Skoltransport).\n\nPaste your login token (JWT). For now you can copy it from the web client: open the browser developer tools, look at a request to the API and copy the value after `Authorization: JWT`. Tokens are valid for about 30 days; you will be asked for a new one when it expires.",
+        "description": "Unofficial integration for school/service transport trips booked through the Petra platform (e.g. Cabonline Serviceresor / Skoltransport). Choose the operator's country and how to log in.",
         "data": {
           "country": "Operator country",
+          "auth_method": "Log in with"
+        }
+      },
+      "login": {
+        "title": "Log in",
+        "description": "Use the same username (e-mail) and password as in the operator's app or web page. A one-time code is then sent to you by SMS. The password is not stored; Home Assistant asks you to log in again when the login expires (about every 30 days).",
+        "data": {
+          "username": "Username",
+          "password": "Password"
+        }
+      },
+      "code": {
+        "title": "SMS code",
+        "description": "Enter the code from the SMS. If it did not arrive or has expired, tick \"Send a new code\" and submit.",
+        "data": {
+          "code": "Code",
+          "resend": "Send a new code"
+        }
+      },
+      "token": {
+        "title": "Paste a token",
+        "description": "Paste a login token (JWT) copied from the web client: open the browser developer tools, look at a request to the API and copy the value after `Authorization: JWT`. Tokens are valid for about 30 days; you will be asked for a new one when it expires.",
+        "data": {
           "token": "Token (JWT)"
         }
       },
-      "reauth_confirm": {
-        "title": "Token expired",
-        "description": "The Petra token was rejected or has expired. Paste a new token for the same account.",
-        "data": {
-          "token": "Token (JWT)"
+      "reauth": {
+        "title": "Log in again",
+        "description": "The login to the Petra service has expired or expires soon.",
+        "menu_options": {
+          "login": "Log in with username and password",
+          "token": "Paste a token"
         }
       }
     },
     "error": {
       "invalid_token": "This does not look like a valid token (JWT).",
       "token_expired": "This token has already expired.",
-      "wrong_user": "This token belongs to a different account.",
+      "wrong_user": "This login belongs to a different account.",
       "invalid_auth": "The server rejected the token.",
       "operator_config": "The operator configuration could not be used (API key rejected).",
-      "cannot_connect": "Could not connect to the Petra service."
+      "cannot_connect": "Could not connect to the Petra service.",
+      "invalid_credentials": "Wrong username or password.",
+      "invalid_code": "Wrong or expired code. Try again, or ask for a new code.",
+      "code_format": "Enter the code's digits.",
+      "code_resent": "A new code was sent."
     },
     "abort": {
       "already_configured": "This account is already configured.",
@@ -84,6 +112,12 @@
         "US": "North America",
         "IL": "Israel",
         "AU": "Australia"
+      }
+    },
+    "auth_method": {
+      "options": {
+        "login": "Username and password (SMS code)",
+        "token": "A token copied from the web page (advanced)"
       }
     }
   },

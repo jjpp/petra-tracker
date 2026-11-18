@@ -26,7 +26,7 @@ Contents:
 | 1 | Core: client, schema guard, ETA (straight-line), tracker, backoff, telemetry | done |
 | 2 | Home Assistant integration MVP | done |
 | 3 | Routing-based ETA (Waze / OSRM / ORS) | done; engine comparison on real trips ongoing |
-| 4 | Username/password + SMS 2FA login (instead of pasting a token) | planned |
+| 4 | Username/password + SMS 2FA login (instead of pasting a token) | done |
 | 5 | Pooled-trip handling (needs a real pooled trip captured via telemetry) | planned |
 | 6 | Android app | planned |
 
@@ -49,13 +49,20 @@ Then add it under *Settings → Devices & services*.
 *Settings → Devices & services → Add integration → Petra Trip Tracker*
 
 1. **Operator country** — the integration downloads that operator's public configuration
-   (API address and client key).
-2. **Token (JWT)** — for now, copy it from the web client: open the browser's developer tools on
-   the operator's web page, find a request to the API and copy the value after
-   `Authorization: JWT` (pasting the whole `JWT eyJ…` string is fine). Tokens last ~30 days; HA
-   asks for a new one when it expires (and fires an event 7 days before).
+   (API address and client key). Choose **Username and password**.
+2. **Log in** with the same username (e-mail) and password as in the operator's app or web page.
+3. **SMS code** — enter the code you receive (*Send a new code* if it does not arrive).
 
 The children on the account are discovered automatically from their bookings.
+
+**The password is not stored** — only the username (to pre-fill the form) and the login token,
+which is valid for about 30 days. Three days before it expires, Home Assistant shows
+*Re-authentication required*: log in again (password + SMS code); tracking keeps working
+meanwhile, and if the token runs out anyway, polling pauses until you log in again. Seven days
+before expiry the `petra_tracker_token_expiring` event fires as well.
+
+*Advanced:* instead of logging in you can paste a token (JWT) copied from the web client (browser
+developer tools → a request to the API → the value after `Authorization: JWT`).
 
 ### Entities
 

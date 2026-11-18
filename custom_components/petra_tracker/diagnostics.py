@@ -9,11 +9,19 @@ from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
 from . import PetraConfigEntry
-from .const import CONF_API_KEY, CONF_PERSONS, CONF_TOKEN, CONF_USER_ID, OPT_ROUTING_API_KEY
+from .const import (
+    CONF_API_KEY,
+    CONF_PERSONS,
+    CONF_TOKEN,
+    CONF_USER_ID,
+    CONF_USERNAME,
+    OPT_ROUTING_API_KEY,
+)
 from .core.schema import schema_version
 
 TO_REDACT = {
-    CONF_TOKEN, CONF_API_KEY, CONF_USER_ID, CONF_PERSONS, OPT_ROUTING_API_KEY, "unique_id", "title"
+    CONF_TOKEN, CONF_API_KEY, CONF_USER_ID, CONF_USERNAME, CONF_PERSONS, OPT_ROUTING_API_KEY,
+    "unique_id", "title",
 }
 
 

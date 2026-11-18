@@ -15,6 +15,7 @@ CONF_BASE_URL = "base_url"
 CONF_API_KEY = "api_key"
 CONF_USER_ID = "user_id"
 CONF_PERSONS = "persons"  # {person_id (str): first name or None}
+CONF_USERNAME = "username"  # for pre-filling re-login; the password is never stored
 
 # Options (with defaults)
 OPT_ACTIVE_INTERVAL_S = "active_interval_s"
@@ -52,6 +53,7 @@ DEFAULT_OPTIONS: dict[str, int | float | bool] = {
 }
 
 TOKEN_WARN_DAYS = 7
+REAUTH_DAYS = 3  # ask for a new login this long before the token expires
 PERSON_DISCOVERY_DAYS = 30
 
 # Events fired on the HA bus (build notifications on these).

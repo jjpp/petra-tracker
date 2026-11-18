@@ -55,6 +55,13 @@ class FakeSession:
             raise nxt
         return nxt
 
+    def post(self, url, json=None, headers=None, timeout=None):
+        self.requests.append({"url": url, "json": json, "headers": headers})
+        nxt = self.responses.pop(0)
+        if isinstance(nxt, Exception):
+            raise nxt
+        return nxt
+
 
 START = datetime(2030, 1, 14, 23, 0, tzinfo=UTC)
 END = START + timedelta(days=1)

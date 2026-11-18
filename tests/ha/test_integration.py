@@ -318,3 +318,13 @@ async def test_trip_ended_away_from_destination(hass, aioclient_mock, frozen):
     await refresh(hass, entry)
     assert detail_calls() == before  # the extra detail fetch happens once
     assert hass.states.get(STATUS).attributes["ended_at_destination"] is False
+
+
+async def test_reauth_is_requested_before_the_token_expires(hass, aioclient_mock, freezer):
+    freezer.move_to(syn.DAY + timedelta(days=28))  # token (issued DAY-1, 30 days) expires in ~1 day
+    mock_api(aioclient_mock)
+    entry = await setup(hass)
+    flows = hass.config_entries.flow.async_progress()
+    assert any(f["context"]["source"] == "reauth" and f["context"].get("entry_id") == entry.entry_id
+               for f in flows)
+    assert hass.states.get(STATUS).state != "unavailable"  # still working meanwhile

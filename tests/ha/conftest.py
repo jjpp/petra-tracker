@@ -58,7 +58,22 @@ def mock_api(aioclient_mock: AiohttpClientMocker, list_body=None, detail_body=No
         aioclient_mock.get(DETAIL_URL, json=detail_body, headers=RATE_HEADERS)
 
 
-def make_entry(**options) -> MockConfigEntry:
+LOGIN_URL = f"{BASE}authentication/login"
+VERIFY_URL = f"{BASE}authentication/verify2factor"
+
+
+def mock_login(aioclient_mock, *, login_status=201, login_body=None, verify_status=201, verify_body=None,
+               token=None):
+    """Register login + verify2factor answers (call after mock_api, which clears mocks)."""
+    aioclient_mock.post(LOGIN_URL, status=login_status, json=login_body if login_body is not None else {
+        "httpStatusCode": 200, "success": True, "data": {"userId": syn.USER_ID}, "message": "2FA Success"})
+    aioclient_mock.post(VERIFY_URL, status=verify_status, json=verify_body if verify_body is not None else {
+        "httpStatusCode": 200, "success": True, "message": "Success", "error": "",
+        "data": {"username": "parent@example.invalid", "firstName": "Test", "lastName": "Parent",
+                 "userType": 8, "token": token or TOKEN, "companyNo": 1}})
+
+
+def make_entry(*, data: dict | None = None, **options) -> MockConfigEntry:
     return MockConfigEntry(
         domain=DOMAIN,
         title="Petra trips (Alex)",
@@ -70,6 +85,7 @@ def make_entry(**options) -> MockConfigEntry:
             CONF_TOKEN: TOKEN,
             CONF_USER_ID: syn.USER_ID,
             CONF_PERSONS: {str(syn.PERSON_ID): "Alex"},
+            **(data or {}),
         },
         options={**DEFAULT_OPTIONS, **options},
     )

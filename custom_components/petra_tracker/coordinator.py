@@ -45,6 +45,7 @@ from .const import (
     OPT_TELEMETRY_RETENTION_DAYS,
     OPT_TRACK_ONBOARD,
     OPT_WAZE_REGION,
+    REAUTH_DAYS,
     STORAGE_VERSION,
     TOKEN_WARN_DAYS,
 )
@@ -160,6 +161,7 @@ class PetraCoordinator(DataUpdateCoordinator[PetraData]):
         self._reported_issues: set[tuple[str, str, str]] = set()
         self._degraded_announced = False
         self._token_warned_on: date | None = None
+        self._reauth_started_on: date | None = None
         self._pruned_on: date | None = None
         self._api_key_refreshed = False
         # Tracker memory survives restarts/reloads, so events are neither repeated
@@ -262,6 +264,12 @@ class PetraCoordinator(DataUpdateCoordinator[PetraData]):
                 EVENT_TOKEN_EXPIRING,
                 {"expires_at": info.expires_at.isoformat(), "days_left": max(left.days, 0)},
             )
+        if left <= timedelta(days=REAUTH_DAYS) and self._reauth_started_on != now.date():
+            # Ask for a new login before polling breaks (shows "re-authentication
+            # required" in Home Assistant; the token keeps working meanwhile).
+            self._reauth_started_on = now.date()
+            LOGGER.info("Petra token expires %s; asking for a new login", info.expires_at)
+            self.config_entry.async_start_reauth(self.hass)
 
     async def _note_new_persons(self, trips: list[Trip]) -> None:
         changed = False
