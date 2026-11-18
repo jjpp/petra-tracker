@@ -22,7 +22,9 @@ OSRM = "osrm"
 OPENROUTESERVICE = "openrouteservice"
 WAZE = "waze"
 ENGINES = (STRAIGHT_LINE, OSRM, OPENROUTESERVICE, WAZE)
-WAZE_REGIONS = ("EU", "US", "IL", "AU")
+# Option values are lowercase (Home Assistant translation keys must be);
+# pywaze wants them upper-case.
+WAZE_REGIONS = ("eu", "us", "il", "au")
 
 OSRM_DEFAULT_URL = "https://router.project-osrm.org"
 ORS_DEFAULT_URL = "https://api.openrouteservice.org"
@@ -153,7 +155,7 @@ def make_provider(
     *,
     url: str = "",
     api_key: str = "",
-    waze_region: str = "EU",
+    waze_region: str = "eu",
 ) -> RoutingProvider | None:
     """None means: straight-line estimate only."""
     if engine == OSRM:
@@ -161,7 +163,7 @@ def make_provider(
     if engine == OPENROUTESERVICE:
         return OrsProvider(session, api_key, url or ORS_DEFAULT_URL)
     if engine == WAZE:
-        return WazeProvider(waze_region)
+        return WazeProvider(str(waze_region or "eu").upper())
     return None
 
 

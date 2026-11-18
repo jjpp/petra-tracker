@@ -376,4 +376,6 @@ class PetraOptionsFlow(OptionsFlow):
             else:
                 return self.async_create_entry(data=cleaned)
         current = {**DEFAULT_OPTIONS, **self.config_entry.options, **(user_input or {})}
+        # Saved by 0.4.0-0.7.0 as upper case ("EU"); the selector keys are lowercase.
+        current[OPT_WAZE_REGION] = str(current[OPT_WAZE_REGION]).lower()
         return self.async_show_form(step_id="init", data_schema=_options_schema(current), errors=errors)

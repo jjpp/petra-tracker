@@ -110,10 +110,10 @@
     },
     "waze_region": {
       "options": {
-        "EU": "Europe",
-        "US": "North America",
-        "IL": "Israel",
-        "AU": "Australia"
+        "eu": "Europe",
+        "us": "North America",
+        "il": "Israel",
+        "au": "Australia"
       }
     },
     "auth_method": {

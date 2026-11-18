@@ -51,7 +51,7 @@ DEFAULT_OPTIONS: dict[str, int | float | bool] = {
     OPT_ROUTING: "straight_line",  # no external service unless the user picks one
     OPT_ROUTING_URL: "",  # empty = the engine's public default
     OPT_ROUTING_API_KEY: "",
-    OPT_WAZE_REGION: "EU",
+    OPT_WAZE_REGION: "eu",
 }
 
 TOKEN_WARN_DAYS = 7

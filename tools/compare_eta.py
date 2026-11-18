@@ -120,7 +120,7 @@ async def main() -> None:
     ap.add_argument("--osrm-url", default="")
     ap.add_argument("--ors-url", default="")
     ap.add_argument("--ors-key", default="")
-    ap.add_argument("--waze-region", default="EU")
+    ap.add_argument("--waze-region", default="eu")
     ap.add_argument("--speed", type=float, default=25.0, help="assumed km/h for straight_line")
     ap.add_argument("--every", type=int, default=60, help="at most one sample per N seconds")
     ap.add_argument("--end-near", type=float, default=END_NEAR_DESTINATION_M,

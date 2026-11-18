@@ -108,3 +108,20 @@ async def test_options_require_ors_key_unless_own_server(hass, aioclient_mock, f
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options[OPT_ROUTING_API_KEY] == "" and entry.options[OPT_ROUTING] == "osrm"
     await hass.async_block_till_done()
+
+
+async def test_options_form_accepts_old_upper_case_waze_region(hass, aioclient_mock, frozen):
+    from custom_components.petra_tracker.const import OPT_WAZE_REGION
+
+    entry = make_entry(**{OPT_WAZE_REGION: "EU"})  # as saved by 0.4.0-0.7.0
+    entry.add_to_hass(hass)
+    mock_api(aioclient_mock)
+    await hass.config_entries.async_setup(entry.entry_id)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    region_key = next(k for k in result["data_schema"].schema if k == OPT_WAZE_REGION)
+    assert region_key.default() == "eu"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {**{k: v for k, v in entry.options.items() if k != OPT_WAZE_REGION}, OPT_WAZE_REGION: "eu"}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY and entry.options[OPT_WAZE_REGION] == "eu"
+    await hass.async_block_till_done()

@@ -184,3 +184,9 @@ async def test_route_for_other_leg_is_ignored():
     await attach_route(trip, T0, CountingProvider(), RouteCache(), track_onboard=True)
     trip.route = type(trip.route)(leg="to_destination", duration_s=60, distance_m=1, engine="test")
     assert estimate_eta(trip, T0, EtaParams()).routing == "straight_line"
+
+
+def test_waze_region_is_sent_upper_case_and_old_values_still_work():
+    s = FakeSession()
+    assert make_provider("waze", s, waze_region="eu")._region == "EU"
+    assert make_provider("waze", s, waze_region="EU")._region == "EU"  # saved by 0.4.0-0.7.0
