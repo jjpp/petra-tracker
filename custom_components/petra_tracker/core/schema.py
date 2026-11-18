@@ -180,6 +180,10 @@ class SchemaValidator:
                         "scaledCoordinates",
                         f"{path}.addresses[{j}].coordinates",
                     )
+        attributes = item.get("attributes")
+        if isinstance(attributes, list):
+            for j, attr in enumerate(attributes):
+                self._object(attr, "bookingAttribute", f"{path}.attributes[{j}]")
         persons = item.get("persons")
         if isinstance(persons, list):
             for j, ev in enumerate(persons):

@@ -83,7 +83,10 @@ def order(
         "combinedStatus": combined, "coordinatedBookRefnr": book_ref + 1,
         "coordinatedPosition": coordinated_position,
         "addresses": [address("pickup", *PICKUP), address("destination", *DESTINATION)],
-        "attributes": [], "status": status,
+        "attributes": [
+            {"attributeID": 1, "amount": 1, "abbreviation": "SK", "description": "SKOLTUR"},
+            {"attributeID": 2, "amount": 0, "abbreviation": "EN", "description": "ENSAMÅKNING"},
+        ], "status": status,
         "persons": [{"tripRefID": 1, "personIndex": 1, "type": t, "timeStamp": iso(ts)}
                     for t, ts in (events or [])] or None,
         "permissions": [], "metaData": {"isEditable": False, "isReopenable": False}, "Car": [],

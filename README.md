@@ -74,7 +74,7 @@ Per child (device *"\<name\> transport"*):
 
 | Entity | Meaning |
 |---|---|
-| `sensor.<name>_transport_trip_status` | `idle`, `scheduled`, `approaching`, `at_pickup`, `onboard`, `finished`, `cancelled`, `unknown` (raw API status in attributes) |
+| `sensor.<name>_transport_trip_status` | `idle`, `scheduled`, `approaching`, `at_pickup`, `onboard`, `finished`, `cancelled`, `unknown`; attributes include the raw API status, `pooling_allowed` (operator may share the car), `coordinated_position` (> 1 = other stops first) and `booking_attributes` (e.g. `SKOLTUR`) |
 | `sensor.<name>_transport_eta` | minutes to the next waypoint; attributes `leg` (`to_pickup`/`to_destination`), `source` (`schedule`/`gps`/`arrived`), `distance_m`, `approximate` |
 | `device_tracker.<name>_transport_car` | live car position during a trip (shows on the HA map) |
 | `binary_sensor.<name>_transport_trip_active` | on while a car is on its way / at pickup / onboard |

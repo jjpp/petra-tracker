@@ -7,21 +7,56 @@
     "order_detail": "GET {base}orders/{book_ref}"
   },
   "enums": {
-    "combinedStatus": ["booked", "arriving", "arrived", "personIn", "concluded", "completed", "deleted", "cancelled"],
-    "state": ["booked", "arriving", "arrived", "customer", "concluded", "completed", "deleted", "cancelled"],
-    "personEventType": [0, 1, 3]
+    "combinedStatus": [
+      "booked",
+      "arriving",
+      "arrived",
+      "personIn",
+      "concluded",
+      "completed",
+      "deleted",
+      "cancelled"
+    ],
+    "state": [
+      "booked",
+      "arriving",
+      "arrived",
+      "customer",
+      "concluded",
+      "completed",
+      "deleted",
+      "cancelled"
+    ],
+    "personEventType": [
+      0,
+      1,
+      3
+    ]
   },
   "objects": {
     "operatorConfig": {
-      "required": {"configs": "object"},
+      "required": {
+        "configs": "object"
+      },
       "optional": {}
     },
     "operatorConfigBody": {
-      "required": {"globalApiUrl": "string", "globalApiKey": "string"},
-      "optional": {"linkToTermsOfService": "string", "linkToPrivacy": "string", "linkToGdprCompliance": "string", "appMinVersion": "string"}
+      "required": {
+        "globalApiUrl": "string",
+        "globalApiKey": "string"
+      },
+      "optional": {
+        "linkToTermsOfService": "string",
+        "linkToPrivacy": "string",
+        "linkToGdprCompliance": "string",
+        "appMinVersion": "string"
+      }
     },
     "orderList": {
-      "required": {"count": "int", "items": "array"},
+      "required": {
+        "count": "int",
+        "items": "array"
+      },
       "optional": {}
     },
     "order": {
@@ -34,48 +69,119 @@
         "addresses": "array"
       },
       "optional": {
-        "bookSeqNo": "int", "companyNo": "int", "createdDateTime": "string", "operator": "string",
-        "scheduleID": "int", "firstName": "string", "lastName": "string", "phone": "string",
-        "email": "string", "customerRefNo": "string", "projectID": "string", "fixedPrice": "number",
-        "comment": "string", "fixedCar": "int", "coordinable": "bool", "urgent": "bool",
-        "manual": "bool", "account": "int", "fixedDriver": "int", "productID": "int",
-        "agreementID": "int", "dropOffTimeDateTime": "string|null", "coordinatedBookRefnr": "int|null",
-        "coordinatedPosition": "int|null", "attributes": "array", "persons": "array|null",
-        "permissions": "array", "metaData": "object", "Car": "array",
-        "editTime": "string|null", "editOperator": "string|null", "commentOperator": "string|null",
+        "bookSeqNo": "int",
+        "companyNo": "int",
+        "createdDateTime": "string",
+        "operator": "string",
+        "scheduleID": "int",
+        "firstName": "string",
+        "lastName": "string",
+        "phone": "string",
+        "email": "string",
+        "customerRefNo": "string",
+        "projectID": "string",
+        "fixedPrice": "number",
+        "comment": "string",
+        "fixedCar": "int",
+        "coordinable": "bool",
+        "urgent": "bool",
+        "manual": "bool",
+        "account": "int",
+        "fixedDriver": "int",
+        "productID": "int",
+        "agreementID": "int",
+        "dropOffTimeDateTime": "string|null",
+        "coordinatedBookRefnr": "int|null",
+        "coordinatedPosition": "int|null",
+        "attributes": "array",
+        "persons": "array|null",
+        "permissions": "array",
+        "metaData": "object",
+        "Car": "array",
+        "editTime": "string|null",
+        "editOperator": "string|null",
+        "commentOperator": "string|null",
         "externalCodesString": "string|null"
       }
     },
     "status": {
-      "required": {"state": "string"},
+      "required": {
+        "state": "string"
+      },
       "optional": {
-        "provider": "any", "carNo": "int|null", "driverNo": "int|null", "operator": "string|null",
-        "timeStamp": "string|null", "price": "number|null", "tripAssigned": "string|null",
-        "tripStarted": "string|null", "tripEnded": "string|null", "commentTrip": "string|null",
-        "noshowTimeStamp": "string|null", "noshowOperatorId": "string|null",
-        "createdByUserId": "any", "gpsPositions": "array"
+        "provider": "any",
+        "carNo": "int|null",
+        "driverNo": "int|null",
+        "operator": "string|null",
+        "timeStamp": "string|null",
+        "price": "number|null",
+        "tripAssigned": "string|null",
+        "tripStarted": "string|null",
+        "tripEnded": "string|null",
+        "commentTrip": "string|null",
+        "noshowTimeStamp": "string|null",
+        "noshowOperatorId": "string|null",
+        "createdByUserId": "any",
+        "gpsPositions": "array"
       }
     },
     "address": {
-      "required": {"type": "string", "coordinates": "object"},
+      "required": {
+        "type": "string",
+        "coordinates": "object"
+      },
       "optional": {
-        "streetID": "int", "houseNo": "int", "houseLetter": "string", "floor": "string",
-        "door": "string", "pOIId": "int", "comment": "string", "district": "int",
-        "pOIName": "string", "poiname": "string", "streetName": "string", "city": "string",
-        "zipCode": "string", "countryCode": "string", "fullAddress": "string"
+        "streetID": "int",
+        "houseNo": "int",
+        "houseLetter": "string",
+        "floor": "string",
+        "door": "string",
+        "pOIId": "int",
+        "comment": "string",
+        "district": "int",
+        "pOIName": "string",
+        "poiname": "string",
+        "streetName": "string",
+        "city": "string",
+        "zipCode": "string",
+        "countryCode": "string",
+        "fullAddress": "string"
       }
     },
     "scaledCoordinates": {
-      "required": {"x": "int", "y": "int"},
+      "required": {
+        "x": "int",
+        "y": "int"
+      },
       "optional": {}
     },
     "gpsPosition": {
-      "required": {"timeStamp": "string", "x": "number", "y": "number"},
+      "required": {
+        "timeStamp": "string",
+        "x": "number",
+        "y": "number"
+      },
       "optional": {}
     },
     "personEvent": {
-      "required": {"type": "int", "timeStamp": "string"},
-      "optional": {"tripRefID": "int", "personIndex": "int"}
+      "required": {
+        "type": "int",
+        "timeStamp": "string"
+      },
+      "optional": {
+        "tripRefID": "int",
+        "personIndex": "int"
+      }
+    },
+    "bookingAttribute": {
+      "required": {
+        "abbreviation": "string",
+        "amount": "number"
+      },
+      "optional": {
+        "attributeID": "int",
+        "description": "string"
+      }
     }
   },
   "notes": {

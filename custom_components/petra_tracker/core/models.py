@@ -122,6 +122,19 @@ class RoutedLeg:
 
 
 @dataclass(frozen=True)
+class BookingAttribute:
+    """A booking attribute, e.g. SK "SKOLTUR" (school trip). Set when amount > 0."""
+
+    abbreviation: str | None
+    description: str | None
+    amount: float
+
+    @property
+    def is_set(self) -> bool:
+        return self.amount > 0
+
+
+@dataclass(frozen=True)
 class PersonEvent:
     type: int
     time: datetime
@@ -149,6 +162,8 @@ class Trip:
     gps: list[GpsFix] = field(default_factory=list)
     route: RoutedLeg | None = None
     status_time: datetime | None = None  # status.timeStamp: when the status last changed
+    coordinable: bool | None = None  # the operator may pool this trip with others
+    attributes: list[BookingAttribute] = field(default_factory=list)
 
     @property
     def last_fix(self) -> GpsFix | None:
@@ -229,7 +244,23 @@ def parse_order(item: dict[str, Any]) -> Trip | None:
         coordinated_with_other=bool(item.get("coordinatedBookRefnr")),
         events=events,
         status_time=parse_time(status.get("timeStamp")),
+        coordinable=item.get("coordinable") if isinstance(item.get("coordinable"), bool) else None,
+        attributes=_attributes(item.get("attributes")),
     )
+
+
+def _attributes(raw: Any) -> list[BookingAttribute]:
+    out = []
+    for a in raw if isinstance(raw, list) else []:
+        if not isinstance(a, dict):
+            continue
+        amount = a.get("amount")
+        out.append(BookingAttribute(
+            abbreviation=a.get("abbreviation") if isinstance(a.get("abbreviation"), str) else None,
+            description=a.get("description") if isinstance(a.get("description"), str) else None,
+            amount=float(amount) if isinstance(amount, (int, float)) and not isinstance(amount, bool) else 0.0,
+        ))
+    return out
 
 
 def parse_order_list(data: dict[str, Any]) -> list[Trip]:

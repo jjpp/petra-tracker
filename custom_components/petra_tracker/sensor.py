@@ -74,6 +74,8 @@ class TripStatusSensor(PetraPersonEntity, SensorEntity):
             "trip_started": _iso(t.trip_started),
             "trip_ended": _iso(t.trip_ended),
             "coordinated_position": t.coordinated_position,
+            "pooling_allowed": t.coordinable,
+            "booking_attributes": [a.description or a.abbreviation for a in t.attributes if a.is_set],
             "data_stale": not self.coordinator.data.connection_ok,
             **self._ending(p),
         }

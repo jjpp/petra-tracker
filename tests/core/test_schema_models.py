@@ -103,3 +103,16 @@ def test_detail_without_gps_is_normal_before_a_car_is_assigned():
     assert SchemaValidator().order_detail(syn.order()) == []  # booked
     done = syn.order(combined="concluded", car_no=syn.CAR_NO, assigned=syn.PICKUP_TIME)
     assert SchemaValidator().order_detail(done) == []
+
+
+def test_booking_attributes_and_pooling_flag():
+    [trip] = parse_order_list(syn.order_list(syn.order()))
+    assert trip.coordinable is True
+    assert [(a.abbreviation, a.is_set) for a in trip.attributes] == [("SK", True), ("EN", False)]
+
+
+def test_booking_attribute_shape_is_validated():
+    o = syn.order()
+    o["attributes"][0]["amount"] = "1"
+    issues = SchemaValidator().order_list(syn.order_list(o))
+    assert any(i.path.endswith("attributes[0].amount") for i in issues)

@@ -60,6 +60,9 @@ async def test_setup_scheduled_trip(hass, aioclient_mock, frozen):
     assert hass.states.get(STATUS).state == "scheduled"
     eta = hass.states.get(ETA)
     assert eta.state == "30" and eta.attributes["source"] == "schedule"
+    status = hass.states.get(STATUS).attributes
+    assert status["pooling_allowed"] is True and status["coordinated_position"] == 1
+    assert status["booking_attributes"] == ["SKOLTUR"]  # only the ones that are set
     assert hass.states.get(ACTIVE).state == "off"
     assert hass.states.get(CONNECTION).state == "on"
     assert hass.states.get(SCHEMA).state == "ok"
