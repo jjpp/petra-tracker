@@ -61,6 +61,9 @@ which is valid for about 30 days. Three days before it expires, Home Assistant s
 meanwhile, and if the token runs out anyway, polling pauses until you log in again. Seven days
 before expiry the `petra_tracker_token_expiring` event fires as well.
 
+**Log in again at any time** (e.g. to test it, or to switch from a pasted token to logging in):
+*Settings → Devices & services → Petra Trip Tracker →* ⋮ *→ Reconfigure*.
+
 *Advanced:* instead of logging in you can paste a token (JWT) copied from the web client (browser
 developer tools → a request to the API → the value after `Authorization: JWT`).
 
@@ -75,8 +78,10 @@ Per child (device *"\<name\> transport"*):
 | `device_tracker.<name>_transport_car` | live car position during a trip (shows on the HA map) |
 | `binary_sensor.<name>_transport_trip_active` | on while a car is on its way / at pickup / onboard |
 | `sensor.<name>_transport_next_pickup` | next scheduled pickup |
+| `sensor.<name>_transport_last_update` | when the service last had news about the current trip (status change, GPS fix, pickup/drop-off); attributes `last_gps_fix`, `last_status_change`, `last_poll` |
 
-Account (device *"Petra account"*): `token_expiry`, `api_schema_status`, `api_connection`, and the
+Account (device *"Petra account"*): `last_update` (last successful poll), `token_expiry`,
+`api_schema_status`, `api_connection`, and the
 **`switch.petra_account_polling`** switch (see *Turning it off*).
 
 ### Notifications (blueprint)

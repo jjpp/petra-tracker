@@ -30,11 +30,18 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: PetraConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
     coordinator = entry.runtime_data
-    async_add_entities([TokenExpirySensor(coordinator), SchemaStatusSensor(coordinator)])
+    async_add_entities(
+        [TokenExpirySensor(coordinator), SchemaStatusSensor(coordinator), LastPollSensor(coordinator)]
+    )
     add_person_entities(
         coordinator,
         async_add_entities,
-        lambda c, pid: (TripStatusSensor(c, pid), EtaSensor(c, pid), NextPickupSensor(c, pid)),
+        lambda c, pid: (
+            TripStatusSensor(c, pid),
+            EtaSensor(c, pid),
+            NextPickupSensor(c, pid),
+            TripLastUpdateSensor(c, pid),
+        ),
     )
 
 
@@ -161,3 +168,48 @@ class SchemaStatusSensor(PetraAccountEntity, SensorEntity):
             "schema_version": schema_version(),
             "issues": [i.as_dict() for i in data.schema_issues] if data else [],
         }
+
+
+class TripLastUpdateSensor(PetraPersonEntity, SensorEntity):
+    """When the service last had news about the child's current trip (status change,
+    GPS fix, pickup/drop-off) - shows how fresh the car's data is."""
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    def __init__(self, coordinator: PetraCoordinator, person_id: int) -> None:
+        super().__init__(coordinator, person_id, "trip_last_update")
+
+    @property
+    def native_value(self) -> datetime | None:
+        p = self.person
+        return p.trip.last_update if p and p.trip else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        p = self.person
+        t = p.trip if p else None
+        data = self.coordinator.data
+        return {
+            "last_gps_fix": _iso(t.last_fix.time) if t and t.last_fix else None,
+            "last_status_change": _iso(t.status_time) if t else None,
+            "last_poll": _iso(data.updated_at) if data else None,
+        }
+
+
+class LastPollSensor(PetraAccountEntity, SensorEntity):
+    """Last successful poll of the service (stays put while it is unreachable)."""
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: PetraCoordinator) -> None:
+        super().__init__(coordinator, "last_poll")
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.data is not None  # useful precisely during an outage
+
+    @property
+    def native_value(self) -> datetime | None:
+        data = self.coordinator.data
+        return data.updated_at if data else None

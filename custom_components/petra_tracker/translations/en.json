@@ -39,6 +39,14 @@
           "login": "Log in with username and password",
           "token": "Paste a token"
         }
+      },
+      "reconfigure": {
+        "title": "Log in again",
+        "description": "Log in again to the Petra service, or switch between logging in and a pasted token. The account must stay the same.",
+        "menu_options": {
+          "login": "Log in with username and password",
+          "token": "Paste a token"
+        }
       }
     },
     "error": {
@@ -55,7 +63,8 @@
     },
     "abort": {
       "already_configured": "This account is already configured.",
-      "reauth_successful": "Token updated."
+      "reauth_successful": "Token updated.",
+      "reconfigure_successful": "Login updated."
     }
   },
   "options": {
@@ -155,6 +164,12 @@
           "warning": "Unexpected values",
           "breaking": "Incompatible change"
         }
+      },
+      "last_poll": {
+        "name": "Last update"
+      },
+      "trip_last_update": {
+        "name": "Last update"
       }
     },
     "binary_sensor": {

@@ -148,10 +148,19 @@ class Trip:
     events: list[PersonEvent] = field(default_factory=list)
     gps: list[GpsFix] = field(default_factory=list)
     route: RoutedLeg | None = None
+    status_time: datetime | None = None  # status.timeStamp: when the status last changed
 
     @property
     def last_fix(self) -> GpsFix | None:
         return self.gps[-1] if self.gps else None
+
+    @property
+    def last_update(self) -> datetime | None:
+        """Latest news from the service about this trip: status change, GPS fix
+        or pickup/drop-off event."""
+        times = [t for t in (self.status_time, self.last_fix.time if self.last_fix else None) if t]
+        times += [e.time for e in self.events]
+        return max(times, default=None)
 
     def apply_detail(self, detail: dict[str, Any]) -> None:
         """Merge the order_detail response (which carries gpsPositions)."""
@@ -161,6 +170,7 @@ class Trip:
         self.trip_assigned = parse_time(status.get("tripAssigned")) or self.trip_assigned
         self.trip_started = parse_time(status.get("tripStarted")) or self.trip_started
         self.trip_ended = parse_time(status.get("tripEnded")) or self.trip_ended
+        self.status_time = parse_time(status.get("timeStamp")) or self.status_time
         car = status.get("carNo")
         if isinstance(car, int) and car > 0:
             self.car_no = car
@@ -218,6 +228,7 @@ def parse_order(item: dict[str, Any]) -> Trip | None:
         coordinated_position=coord_pos if isinstance(coord_pos, int) else None,
         coordinated_with_other=bool(item.get("coordinatedBookRefnr")),
         events=events,
+        status_time=parse_time(status.get("timeStamp")),
     )
 
 

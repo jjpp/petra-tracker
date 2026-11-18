@@ -223,3 +223,34 @@ async def test_options_flow(hass, aioclient_mock, frozen):
     assert entry.options[OPT_ACTIVE_INTERVAL_S] == 20 and isinstance(entry.options[OPT_ACTIVE_INTERVAL_S], int)
     assert entry.options[OPT_TELEMETRY] is True
     await hass.async_block_till_done()
+
+
+async def test_reconfigure_by_login(hass, aioclient_mock, frozen):
+    entry = make_entry()  # e.g. set up with a pasted token
+    entry.add_to_hass(hass)
+    new = syn.make_token(iat=syn.DAY)
+    mock_api(aioclient_mock)
+    mock_login(aioclient_mock, token=new)
+    result = await entry.start_reconfigure_flow(hass)
+    assert result["type"] is FlowResultType.MENU and result["menu_options"] == ["login", "token"]
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "login"})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"username": USER, "password": PASSWORD})
+    assert result["step_id"] == "code"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"code": "123456"})
+    assert result["type"] is FlowResultType.ABORT and result["reason"] == "reconfigure_successful"
+    await hass.async_block_till_done()
+    assert entry.data[CONF_TOKEN] == new and entry.data[CONF_USERNAME] == USER
+    assert PASSWORD not in str(entry.data)
+
+
+async def test_reconfigure_rejects_other_account(hass, aioclient_mock, frozen):
+    entry = make_entry()
+    entry.add_to_hass(hass)
+    mock_api(aioclient_mock)
+    mock_login(aioclient_mock, token=syn.make_token(user_id=1, iat=syn.DAY))
+    result = await entry.start_reconfigure_flow(hass)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "login"})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"username": USER, "password": PASSWORD})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"code": "123456"})
+    assert result["errors"] == {"base": "wrong_user"}
+    assert entry.data[CONF_TOKEN] == TOKEN  # unchanged

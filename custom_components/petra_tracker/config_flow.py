@@ -8,7 +8,14 @@ from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.config_entries import SOURCE_REAUTH, ConfigFlow, ConfigFlowResult, OptionsFlow
+from homeassistant.config_entries import (
+    SOURCE_REAUTH,
+    SOURCE_RECONFIGURE,
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
@@ -152,14 +159,29 @@ class PetraConfigFlow(ConfigFlow, domain=DOMAIN):
 
     # -- re-authentication ---------------------------------------------------------
     async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
-        entry = self._get_reauth_entry()
+        self._use_entry(self._get_reauth_entry())
+        return self.async_show_menu(step_id="reauth", menu_options=[AUTH_LOGIN, AUTH_TOKEN])
+
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Settings -> integration -> Reconfigure: log in again (or switch to/from a
+        pasted token) at any time, e.g. to test the login."""
+        self._use_entry(self._get_reconfigure_entry())
+        return self.async_show_menu(step_id="reconfigure", menu_options=[AUTH_LOGIN, AUTH_TOKEN])
+
+    def _use_entry(self, entry: ConfigEntry) -> None:
         self._op = OperatorConfig(
             country=entry.data[CONF_COUNTRY],
             base_url=entry.data[CONF_BASE_URL],
             api_key=entry.data[CONF_API_KEY],
         )
         self._username = entry.data.get(CONF_USERNAME)
-        return self.async_show_menu(step_id="reauth", menu_options=[AUTH_LOGIN, AUTH_TOKEN])
+
+    def _existing_entry(self) -> ConfigEntry | None:
+        if self.source == SOURCE_REAUTH:
+            return self._get_reauth_entry()
+        if self.source == SOURCE_RECONFIGURE:
+            return self._get_reconfigure_entry()
+        return None
 
     # -- shared steps ------------------------------------------------------------------
     async def async_step_login(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -266,13 +288,13 @@ class PetraConfigFlow(ConfigFlow, domain=DOMAIN):
         if error:
             return error
         assert info is not None and self._op is not None
-        reauth = self.source == SOURCE_REAUTH
-        if reauth and info.user_id != self._get_reauth_entry().data[CONF_USER_ID]:
+        existing = self._existing_entry()
+        if existing is not None and info.user_id != existing.data[CONF_USER_ID]:
             return "wrong_user"
         client = PetraClient(self._session, self._op.base_url, self._op.api_key, token)
         try:
             persons = await discover_persons(
-                client, info.user_id, dt_util.utcnow(), 1 if reauth else PERSON_DISCOVERY_DAYS
+                client, info.user_id, dt_util.utcnow(), 1 if existing else PERSON_DISCOVERY_DAYS
             )
         except PetraAuthError:
             return "invalid_auth"
@@ -282,11 +304,12 @@ class PetraConfigFlow(ConfigFlow, domain=DOMAIN):
             LOGGER.debug("Setup failed: %s", err)
             return "cannot_connect"
         self._password = None
-        if reauth:
+        if existing is not None:
             updates: dict[str, Any] = {CONF_TOKEN: token}
             if self._username:
                 updates[CONF_USERNAME] = self._username
-            return self.async_update_reload_and_abort(self._get_reauth_entry(), data_updates=updates)
+            # Aborts with "reauth_successful" / "reconfigure_successful".
+            return self.async_update_reload_and_abort(existing, data_updates=updates)
 
         await self.async_set_unique_id(f"{self._op.base_url}#{info.user_id}")
         self._abort_if_unique_id_configured()

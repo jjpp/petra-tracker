@@ -349,3 +349,30 @@ async def test_ended_near_destination_option(hass, aioclient_mock, frozen):
     await refresh(hass, entry)
     [ev] = events
     assert ev.data["ended_at_destination"] is False  # 500 m > configured 300 m
+
+
+async def test_last_update_sensors(hass, aioclient_mock, frozen):
+    from homeassistant.util import dt as dt_util
+
+    frozen.move_to(ASSIGNED + timedelta(minutes=3))
+    lst, det = arriving(ASSIGNED + timedelta(minutes=3))
+    mock_api(aioclient_mock, lst, det)
+    entry = await setup(hass)
+    account = hass.states.get("sensor.petra_account_last_update")
+    trip = hass.states.get("sensor.alex_transport_last_update")
+    assert dt_util.parse_datetime(account.state) == ASSIGNED + timedelta(minutes=3)  # the poll
+    # Latest news about the trip = the newest GPS fix (status changed at assignment).
+    assert dt_util.parse_datetime(trip.state) == ASSIGNED + timedelta(minutes=3)
+    assert dt_util.parse_datetime(trip.attributes["last_status_change"]) == ASSIGNED
+
+    # During an outage the account sensor keeps the last successful poll.
+    mock_api(aioclient_mock, exc=aiohttp.ClientConnectionError())
+    frozen.tick(timedelta(minutes=2))
+    await refresh(hass, entry)
+    assert dt_util.parse_datetime(hass.states.get("sensor.petra_account_last_update").state) == ASSIGNED + timedelta(minutes=3)
+
+
+async def test_trip_last_update_without_trip(hass, aioclient_mock, frozen):
+    mock_api(aioclient_mock, syn.order_list())
+    await setup(hass)
+    assert hass.states.get("sensor.alex_transport_last_update").state == "unknown"
