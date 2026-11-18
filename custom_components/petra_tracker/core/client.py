@@ -209,9 +209,10 @@ async def discover_persons(
     return persons
 
 
-# -- login: username/password + SMS one-time code -------------------------------
+# -- login: username/password + one-time code (e-mail or SMS) ------------------
 # Observed flow (web client): POST authentication/login {username, password,
-# language} -> {success, data: {userId}, message} and an SMS is sent;
+# language} -> {success, data: {userId}, message} and a code is sent (by e-mail
+# or SMS, depending on the account);
 # POST authentication/verify2factor {userId, otp (number), language} ->
 # {success, data: {token, ...profile}}. Only the token is used; the password and
 # the code are never stored or logged.
@@ -279,7 +280,8 @@ def _succeeded(status: int, data: Any) -> bool:
 async def login(
     session: aiohttp.ClientSession, base_url: str, api_key: str, username: str, password: str
 ) -> LoginStart:
-    """Start a login. Normally the server then sends an SMS code (see verify_2fa)."""
+    """Start a login. Normally the server then sends a one-time code by e-mail or SMS
+    (see verify_2fa)."""
     base = base_url if base_url.endswith("/") else base_url + "/"
     status, data, text = await _post_json(
         session,
@@ -307,7 +309,7 @@ def otp_digits(code: str) -> str | None:
 async def verify_2fa(
     session: aiohttp.ClientSession, base_url: str, api_key: str, user_id: int, code: str
 ) -> str:
-    """Finish the login with the SMS code; returns the API token (JWT)."""
+    """Finish the login with the one-time code; returns the API token (JWT)."""
     digits = otp_digits(code)
     if digits is None:
         raise PetraOtpError("the code must be digits")

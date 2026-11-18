@@ -102,7 +102,7 @@ pick country at setup.
 - Holds JWT; decodes `exp`; exposes `expires_at`; alerts at **T-7 days**.
 - On 401/auth-fail → stop, surface re-auth.
 - **v1:** manual JWT paste. **Early follow-up (required for other users):** full
-  `POST /login` → `verifyTwoFactor(smsCode)` flow; the SMS step is user-assisted (a login
+  `POST /login` → `verifyTwoFactor(code)` flow; the code step is user-assisted (a login
   screen on Android; a re-auth dialog in HA).
 
 ### 4.3 Poller (adaptive)
@@ -206,7 +206,7 @@ trip the detail is fetched once more and the end position is compared with the d
 the GPS until the car is within 60 m. The comparison tool uses GPS arrival as ground truth.
 
 **Login (implemented):** `POST authentication/login {username, password, language: "en-GB"}` ->
-`{success, data: {userId}}` and an SMS is sent; `POST authentication/verify2factor {userId, otp
+`{success, data: {userId}}` and a one-time code is sent (e-mail or SMS, depending on the account); `POST authentication/verify2factor {userId, otp
 (number), language: "EN"}` -> `{success, data: {token, profile...}}`. Only the token is used; the
 password is kept in memory only during the dialog, the username is stored to pre-fill re-login.
 Re-authentication is started automatically 3 days before the token expires.
@@ -221,7 +221,7 @@ routing provider + endpoint/key, home/school coords, tracked `person_ids`, **tel
 ## 6. Deliverable B — Android app (standalone)
 
 Native **Kotlin / Jetpack Compose**; **MapLibre** + OSM tiles. Self-contained: user logs in
-with their own credentials (v1: paste JWT; soon: username/password + SMS 2FA), no HA anywhere.
+with their own credentials (v1: paste JWT; soon: username/password + one-time code), no HA anywhere.
 
 ### Features
 - **Login/account** with the user's own credentials; JWT stored in Android Keystore-encrypted prefs.
@@ -292,7 +292,7 @@ every N min.*
 - **Pooled trips (unknown shape):** flagged as expected-unknown; onboard ETA labelled
   approximate when `coordinatedPosition > 1`; first real pooled ride captured via HA telemetry.
 - **JWT expiry / multi-user auth:** 30-day token; v1 manual paste + T-7d alert; **full
-  username/password + SMS 2FA login is a required early follow-up** (unavoidable for other users).
+  username/password + one-time-code login is a required early follow-up** (unavoidable for other users).
 - **Distributability:** `api_key`/`base_url` configurable (per operator); each user logs in for
   their own JWT; no shared secrets beyond the public client `api_key`.
 - **Rate-limit / good-citizen:** server exposes `x-ratelimit-*` (1000/window, 429 + Retry-After);
@@ -311,7 +311,7 @@ every N min.*
 2. **HA integration MVP:** status + eta + device_tracker + change/heartbeat/schema events +
    token sensor + opt-in telemetry. Haversine ETA to start. → deploy, use a few days.
 3. **ETAEngine comparison in HA:** Waze vs OSRM/ORS; pick defaults; onboard-leg target switching.
-4. **Full login (username/password + SMS 2FA)** — once the core is proven; needed before wider sharing.
+4. **Full login (username/password + one-time code)** — once the core is proven; needed before wider sharing.
 5. **Capture a pooled trip** (HA telemetry) → model multi-stop ETA.
 6. **Android app (standalone):** login, map, configurable notifications, onboard-leg toggle, fail-safe SchemaGuard.
 7. **Routing on Android:** OSRM/ORS default + optional Mapbox/Google key.

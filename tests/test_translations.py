@@ -80,3 +80,21 @@ def test_selector_options_in_code_match_translations():
     assert set(sel["country"]["options"]) == set(COUNTRIES)
     assert set(sel["routing"]["options"]) == set(ENGINES)
     assert set(sel["waze_region"]["options"]) == set(WAZE_REGIONS)
+
+
+def test_every_menu_has_labels_for_its_buttons():
+    import ast
+
+    source = (COMPONENT / "config_flow.py").read_text(encoding="utf-8")
+    consts = {"AUTH_LOGIN": "login", "AUTH_TOKEN": "token"}
+    menus = {}
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "async_show_menu":
+            kw = {k.arg: k.value for k in node.keywords}
+            step = kw["step_id"].value
+            menus[step] = [consts.get(getattr(e, "id", ""), getattr(e, "value", None)) for e in kw["menu_options"].elts]
+    assert set(menus) == {"reauth", "reconfigure"}
+    for step, options in menus.items():
+        labels = STRINGS["config"]["step"][step].get("menu_options", {})
+        assert set(options) == set(labels), step
+        assert all(labels[o].strip() for o in options), step

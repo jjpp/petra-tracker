@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Config flow: operator country, then username/password + SMS code (or a pasted
+"""Config flow: operator country, then username/password + a one-time code sent by
+e-mail or SMS (or a pasted
 token); the children are discovered from their bookings."""
 
 from __future__ import annotations
@@ -204,7 +205,8 @@ class PetraConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(step_id="login", data_schema=schema, errors=errors)
 
     async def _send_code(self) -> str | None:
-        """POST login (the server sends an SMS). Returns an error key or None."""
+        """POST login (the server sends a one-time code by e-mail or SMS). Returns an
+        error key or None."""
         assert self._op is not None and self._username is not None and self._password is not None
         try:
             start = await login(

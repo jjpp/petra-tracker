@@ -11,15 +11,15 @@
       },
       "login": {
         "title": "Log in",
-        "description": "Use the same username (e-mail) and password as in the operator's app or web page. A one-time code is then sent to you by SMS. The password is not stored; Home Assistant asks you to log in again when the login expires (about every 30 days).",
+        "description": "Use the same username (e-mail) and password as in the operator's app or web page. A verification code is then sent to you (by e-mail or SMS, depending on the account). The password is not stored; Home Assistant asks you to log in again when the login expires (about every 30 days).",
         "data": {
           "username": "Username",
           "password": "Password"
         }
       },
       "code": {
-        "title": "SMS code",
-        "description": "Enter the code from the SMS. If it did not arrive or has expired, tick \"Send a new code\" and submit.",
+        "title": "Verification code",
+        "description": "Enter the verification code you received by e-mail or SMS. If it did not arrive (check the spam folder) or has expired, tick \"Send a new code\" and submit.",
         "data": {
           "code": "Code",
           "resend": "Send a new code"
@@ -36,16 +36,16 @@
         "title": "Log in again",
         "description": "The login to the Petra service has expired or expires soon.",
         "menu_options": {
-          "login": "Log in with username and password",
-          "token": "Paste a token"
+          "login": "Log in with username and password (verification code by e-mail or SMS)",
+          "token": "Paste a token copied from the web page (advanced)"
         }
       },
       "reconfigure": {
         "title": "Log in again",
         "description": "Log in again to the Petra service, or switch between logging in and a pasted token. The account must stay the same.",
         "menu_options": {
-          "login": "Log in with username and password",
-          "token": "Paste a token"
+          "login": "Log in with username and password (verification code by e-mail or SMS)",
+          "token": "Paste a token copied from the web page (advanced)"
         }
       }
     },
@@ -127,7 +127,7 @@
     },
     "auth_method": {
       "options": {
-        "login": "Username and password (SMS code)",
+        "login": "Username and password (verification code by e-mail or SMS)",
         "token": "A token copied from the web page (advanced)"
       }
     }

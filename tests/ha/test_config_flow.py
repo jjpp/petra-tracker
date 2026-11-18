@@ -36,9 +36,9 @@ def _calls(aioclient_mock, url):
     return [c for c in aioclient_mock.mock_calls if str(c[1]) == url]
 
 
-# -- username/password + SMS code --------------------------------------------------
+# -- username/password + one-time code----------------------------------------------
 
-async def test_login_with_sms_code_creates_entry(hass, aioclient_mock, frozen):
+async def test_login_with_verification_code_creates_entry(hass, aioclient_mock, frozen):
     other = syn.order(book_ref=700009, person_id=502, first_name="SAM")
     mock_api(aioclient_mock, syn.order_list(syn.order(), other))
     mock_login(aioclient_mock)
@@ -104,7 +104,7 @@ async def test_resend_code(hass, aioclient_mock, frozen):
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {"username": USER, "password": PASSWORD})
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {"code": "", "resend": True})
     assert result["step_id"] == "code" and result["errors"] == {"base": "code_resent"}
-    assert len(_calls(aioclient_mock, LOGIN_URL)) == 2  # the login (SMS) was sent again
+    assert len(_calls(aioclient_mock, LOGIN_URL)) == 2  # the login (and so the code) was sent again
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {"code": "123456"})
     assert result["type"] is FlowResultType.CREATE_ENTRY
 

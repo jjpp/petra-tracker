@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Username/password + SMS code login (synthetic responses shaped like the real ones)."""
+"""Username/password + one-time code login (synthetic responses shaped like the real ones)."""
 
 from __future__ import annotations
 

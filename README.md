@@ -26,7 +26,7 @@ Contents:
 | 1 | Core: client, schema guard, ETA (straight-line), tracker, backoff, telemetry | done |
 | 2 | Home Assistant integration MVP | done |
 | 3 | Routing-based ETA (Waze / OSRM / ORS) | done; engine comparison on real trips ongoing |
-| 4 | Username/password + SMS 2FA login (instead of pasting a token) | done |
+| 4 | Username/password + verification code login (instead of pasting a token) | done |
 | 5 | Pooled-trip handling (needs a real pooled trip captured via telemetry) | planned |
 | 6 | Android app | planned |
 
@@ -51,13 +51,14 @@ Then add it under *Settings → Devices & services*.
 1. **Operator country** — the integration downloads that operator's public configuration
    (API address and client key). Choose **Username and password**.
 2. **Log in** with the same username (e-mail) and password as in the operator's app or web page.
-3. **SMS code** — enter the code you receive (*Send a new code* if it does not arrive).
+3. **Verification code** — enter the code you receive by e-mail or SMS, depending on the account
+   (*Send a new code* if it does not arrive; check the spam folder).
 
 The children on the account are discovered automatically from their bookings.
 
 **The password is not stored** — only the username (to pre-fill the form) and the login token,
 which is valid for about 30 days. Three days before it expires, Home Assistant shows
-*Re-authentication required*: log in again (password + SMS code); tracking keeps working
+*Re-authentication required*: log in again (password + verification code); tracking keeps working
 meanwhile, and if the token runs out anyway, polling pauses until you log in again. Seven days
 before expiry the `petra_tracker_token_expiring` event fires as well.
 
