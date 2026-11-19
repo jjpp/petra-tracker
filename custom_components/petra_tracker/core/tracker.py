@@ -35,7 +35,9 @@ DEFAULT_RESTORE_MAX_AGE = timedelta(minutes=30)
 @dataclass
 class TrackerSettings:
     eta_granularity_min: int = 1
-    heartbeat_interval: timedelta | None = None  # None/0 = off
+    heartbeat_interval: timedelta | None = None  # periodic heartbeat; None = off
+    # Heartbeat only when nothing else was emitted for the trip this long; None = off.
+    quiet_heartbeat_interval: timedelta | None = None
     # Warn when a trip is still only booked this long before pickup (None = off).
     late_warning_lead: timedelta | None = timedelta(minutes=1)
     track_onboard: bool = True
@@ -69,10 +71,11 @@ class _Memory:
     announced_eta: dict[int, int] = field(default_factory=dict)
     last_heartbeat: dict[int, datetime] = field(default_factory=dict)
     late_warned: set[int] = field(default_factory=set)
+    last_event_at: dict[int, datetime] = field(default_factory=dict)  # any event for the trip
 
     def prune(self, keep: set[int]) -> None:
         """Forget trips that are no longer in the API window (e.g. yesterday's)."""
-        for d in (self.phase_by_trip, self.announced_eta, self.last_heartbeat):
+        for d in (self.phase_by_trip, self.announced_eta, self.last_heartbeat, self.last_event_at):
             for ref in [r for r in d if r not in keep]:
                 del d[ref]
         self.late_warned &= keep
@@ -167,11 +170,17 @@ class TripTracker:
                 next_pickup=next_pickup(ptrips, now),
                 ending=self._endings.get(trip.book_ref) if trip and trip.phase is Phase.FINISHED else None,
             )
+            person_events: list[TrackerEvent] = []
             for t in ptrips:
-                events.extend(self._phase_events(t, persons[pid] if t is trip else None, name, now))
-                events.extend(self._late_events(t, name, now))
+                person_events.extend(self._phase_events(t, persons[pid] if t is trip else None, name, now))
+                person_events.extend(self._late_events(t, name, now))
             if trip is not None:
-                events.extend(self._eta_events(trip, eta, name, now))
+                person_events.extend(self._eta_events(trip, eta, name, now))
+            for ev in person_events:
+                self._mem.last_event_at[ev.data["book_ref"]] = now
+            if trip is not None:
+                person_events.extend(self._quiet_events(trip, eta, name, now))
+            events.extend(person_events)
 
         refs = {t.book_ref for t in trips}
         self._mem.prune(refs)
@@ -328,10 +337,42 @@ class TripTracker:
                             "status": trip.phase.value,
                             "eta_minutes": eta.minutes if eta else None,
                             "leg": eta.leg.value if eta else None,
+                            "reason": "periodic",
                         },
                     )
                 )
         return out
+
+    def _quiet_events(
+        self, trip: Trip, eta: Eta | None, name: str | None, now: datetime
+    ) -> list[TrackerEvent]:
+        """Heartbeat when nothing else was emitted for the trip for a while (e.g. the
+        car is stuck and the ETA has not changed)."""
+        s = self.settings
+        ref = trip.book_ref
+        if not s.quiet_heartbeat_interval or trip.phase not in ACTIVE_PHASES:
+            return []
+        last = self._mem.last_event_at.get(ref)
+        if last is None:
+            self._mem.last_event_at[ref] = now  # start counting from now
+            return []
+        quiet_for = now - last
+        if quiet_for < s.quiet_heartbeat_interval:
+            return []
+        self._mem.last_event_at[ref] = now
+        return [
+            TrackerEvent(
+                EVENT_HEARTBEAT,
+                {
+                    **self._base(trip, name),
+                    "status": trip.phase.value,
+                    "eta_minutes": eta.minutes if eta else None,
+                    "leg": eta.leg.value if eta else None,
+                    "reason": "quiet",
+                    "quiet_for_min": int(quiet_for.total_seconds() // 60),
+                },
+            )
+        ]
 
 
 # -- polling plan ---------------------------------------------------------------

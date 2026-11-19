@@ -103,7 +103,29 @@ then *Create automation* from it and choose:
   engine plus **speakers** for spoken announcements.
 
 A common setup is push notifications for the status changes and spoken ETA updates on a kitchen
-speaker (two automations from the same blueprint).
+speaker (two automations from the same blueprint). Further options:
+
+- **Announce ETA changes after pickup** (on): turn off to hear ETA updates only while the car is on
+  its way to the pickup; status changes after that are still announced.
+- **Update one notification instead of adding new ones** (off): for the companion app — each
+  child's messages replace the previous notification (same `tag`), status changes still make a
+  sound, ETA updates and heartbeats update it silently. Leave off for other notification services.
+
+### The car on a map
+
+`device_tracker.<name>_transport_car` has the car's position while a trip is active (positions
+arrive about once a minute), so it appears on Home Assistant's **Map** (sidebar). For a dashboard,
+add a *Map* card, e.g. with the car's recent path and your own zones (home, school):
+
+```yaml
+type: map
+entities:
+  - entity: device_tracker.alex_transport_car
+  - zone.home
+hours_to_show: 1
+```
+
+Outside a trip the tracker has no position and is not shown.
 
 **Message texts** are adjustable in the automation's *Message texts* section (defaults are in
 English). Placeholders are replaced with the trip's details, also in the title:
@@ -144,7 +166,7 @@ events include `person_name`, `book_ref`, `car_no` and `scheduled_pickup`.
 | `petra_tracker_state_changed` | trip status changes | `person_name`, `old_status`, `new_status`, `eta_minutes`, `distance_m`, `car_no`, `scheduled_pickup`, …; for `finished` also `ended_at_destination`, `end_distance_m`, `estimated_arrival` |
 | `petra_tracker_car_not_assigned` | once per trip: still only *booked* *N* minutes before pickup (default 1) or after the pickup time | `person_name`, `scheduled_pickup`, `minutes_to_pickup` (negative = late), `pickup_passed` |
 | `petra_tracker_eta_changed` | ETA changed by ≥ the configured granularity (default 1 min) | `old_eta`, `new_eta`, `leg`, `status` |
-| `petra_tracker_heartbeat` | every *N* minutes during a trip (off by default) | `status`, `eta_minutes` |
+| `petra_tracker_heartbeat` | during a trip: every *N* minutes (`reason: periodic`) and/or when nothing else was emitted for *M* minutes (`reason: quiet`, e.g. the car is stuck); both off by default | `status`, `eta_minutes`, `leg`, `reason`, `quiet_for_min` |
 | `petra_tracker_connection_degraded` / `_restored` | API failing for ≥ *N* minutes (default 3) / back | `failed_for_s`, `trip_active` |
 | `petra_tracker_schema_drift` | a response no longer matches the assumed contract | `severity`, `kind`, `path`, `detail` |
 | `petra_tracker_token_expiring` | daily, from 7 days before token expiry | `expires_at`, `days_left` |
@@ -162,7 +184,7 @@ state: state triggers also fire when an entity comes back after a restart (e.g. 
 ### Options
 
 Poll interval during a trip (30 s) and when idle (10 min), fast-poll lead time before a pickup
-(45 min), ETA event granularity (1 min), heartbeat (off), "no car assigned" warning lead time
+(45 min), ETA event granularity (1 min), periodic heartbeat (off), heartbeat after *M* quiet minutes (off), "no car assigned" warning lead time
 (1 min; 0 = at pickup time), connection-alert delay (3 min), track the
 car after pickup (on), assumed speed for the straight-line ETA (25 km/h), ETA routing engine (straight
 line) with its server URL / API key / Waze region, telemetry (off) and its retention (30 days).

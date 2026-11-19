@@ -379,3 +379,15 @@ async def test_trip_last_update_without_trip(hass, aioclient_mock, frozen):
     mock_api(aioclient_mock, syn.order_list())
     await setup(hass)
     assert hass.states.get("sensor.alex_transport_last_update").state == "unknown"
+
+
+async def test_no_schema_alert_for_missing_gps_at_assignment(hass, aioclient_mock, frozen):
+    mock_api(aioclient_mock)
+    entry = await setup(hass)
+    drift = async_capture_events(hass, EVENT_SCHEMA_DRIFT)
+    frozen.move_to(ASSIGNED)
+    o = syn.order(combined="arriving", car_no=syn.CAR_NO, assigned=ASSIGNED)
+    mock_api(aioclient_mock, syn.order_list(o), o)  # detail without gpsPositions, same second
+    await refresh(hass, entry)
+    assert drift == [] and hass.states.get(SCHEMA).state == "ok"
+    assert hass.states.get(STATUS).state == "approaching"

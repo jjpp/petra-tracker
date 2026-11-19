@@ -116,3 +116,14 @@ def test_booking_attribute_shape_is_validated():
     o["attributes"][0]["amount"] = "1"
     issues = SchemaValidator().order_list(syn.order_list(o))
     assert any(i.path.endswith("attributes[0].amount") for i in issues)
+
+
+def test_missing_gps_right_after_assignment_is_normal():
+    from datetime import timedelta
+
+    assigned = syn.PICKUP_TIME - timedelta(minutes=8)
+    o = syn.order(combined="arriving", car_no=syn.CAR_NO, assigned=assigned)  # no gpsPositions yet
+    assert SchemaValidator().order_detail(o, now=assigned) == []
+    assert SchemaValidator().order_detail(o, now=assigned + timedelta(minutes=2)) == []
+    late = SchemaValidator().order_detail(o, now=assigned + timedelta(minutes=4))
+    assert [i.path for i in late] == ["$.status.gpsPositions"]

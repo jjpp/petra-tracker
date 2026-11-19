@@ -15,12 +15,15 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from enum import IntEnum
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from .models import ACTIVE_PHASES, phase_of
+from .models import ACTIVE_PHASES, parse_time, phase_of
+
+GPS_GRACE = timedelta(minutes=3)
 
 CONTRACT_PATH = Path(__file__).with_name("contract.json")
 
@@ -133,6 +136,13 @@ class SchemaValidator:
                 SchemaIssue(Severity.WARNING, "enum", path, f"unknown {enum_name} value {value!r}")
             )
 
+    def _just_assigned(self, status: dict[str, Any]) -> bool:
+        """The GPS list appears only with the first position, seconds after the car
+        is assigned (seen in real data); no warning during that grace period."""
+        now = getattr(self, "_now", None)
+        assigned = parse_time(status.get("tripAssigned"))
+        return now is not None and assigned is not None and now - assigned <= GPS_GRACE
+
     # -- endpoint-specific -------------------------------------------------
     def operator_config(self, data: Any) -> list[SchemaIssue]:
         if self._object(data, "operatorConfig", "$"):
@@ -145,7 +155,9 @@ class SchemaValidator:
                 self._order(item, f"$.items[{i}]", detail=False)
         return self.issues
 
-    def order_detail(self, data: Any) -> list[SchemaIssue]:
+    def order_detail(self, data: Any, now: datetime | None = None) -> list[SchemaIssue]:
+        """`now` enables the grace period after assignment (see GPS_GRACE)."""
+        self._now = now
         self._order(data, "$", detail=True)
         return self.issues
 
@@ -160,7 +172,11 @@ class SchemaValidator:
             if isinstance(gps, list):
                 for j, fix in enumerate(gps):
                     self._object(fix, "gpsPosition", f"{path}.status.gpsPositions[{j}]")
-            elif detail and phase_of(item.get("combinedStatus"), status.get("state")) in ACTIVE_PHASES:
+            elif (
+                detail
+                and phase_of(item.get("combinedStatus"), status.get("state")) in ACTIVE_PHASES
+                and not self._just_assigned(status)
+            ):
                 # Before a car is assigned (and after the trip) there is no live
                 # position; only a car on its way without one is unexpected.
                 self.issues.append(

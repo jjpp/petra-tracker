@@ -23,6 +23,7 @@ OPT_IDLE_INTERVAL_MIN = "idle_interval_min"
 OPT_LEAD_TIME_MIN = "lead_time_min"
 OPT_ETA_GRANULARITY_MIN = "eta_granularity_min"
 OPT_HEARTBEAT_MIN = "heartbeat_min"
+OPT_QUIET_HEARTBEAT_MIN = "quiet_heartbeat_min"
 OPT_LATE_WARNING_MIN = "late_warning_min"
 OPT_FAILURE_ALERT_MIN = "failure_alert_min"
 OPT_TRACK_ONBOARD = "track_onboard"
@@ -41,6 +42,7 @@ DEFAULT_OPTIONS: dict[str, int | float | bool] = {
     OPT_LEAD_TIME_MIN: 45,
     OPT_ETA_GRANULARITY_MIN: 1,
     OPT_HEARTBEAT_MIN: 0,
+    OPT_QUIET_HEARTBEAT_MIN: 0,
     OPT_LATE_WARNING_MIN: 1,
     OPT_FAILURE_ALERT_MIN: 3,
     OPT_TRACK_ONBOARD: True,

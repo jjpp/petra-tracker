@@ -405,3 +405,45 @@ def test_ended_at_destination_distance_is_configurable():
         [ev] = [e for e in evs if e.type == EVENT_STATE_CHANGED]
         assert ev.data["ended_at_destination"] is expected, near
         assert 650 < ev.data["end_distance_m"] < 750
+
+
+# -- quiet heartbeat ---------------------------------------------------------------
+
+def _drive(tracker, gps_at, minutes, step_s=30):
+    """Poll an approaching trip; gps_at(now) gives the car's track up to now."""
+    o = syn.order(combined="arriving", car_no=syn.CAR_NO, assigned=ASSIGNED)
+    out = []
+    now = ASSIGNED
+    while now <= ASSIGNED + timedelta(minutes=minutes):
+        trips = parse_order_list(syn.order_list(o))
+        for t in trips_needing_detail(trips, True):
+            t.apply_detail(syn.detail(o, gps_at(now)))
+        _, evs = tracker.update(trips, now)
+        out += [(now, e) for e in evs]
+        now += timedelta(seconds=step_s)
+    return out
+
+
+def test_quiet_heartbeat_when_car_stands_still():
+    stuck = [(ASSIGNED, syn.PICKUP[0] + 0.02, syn.PICKUP[1])]  # ~2 km away, not moving
+    tracker = warm_tracker(TrackerSettings(quiet_heartbeat_interval=timedelta(minutes=3)))
+    evs = _drive(tracker, lambda now: stuck, minutes=10)
+    beats = [(t, e) for t, e in evs if e.type == EVENT_HEARTBEAT]
+    assert len(beats) >= 2 and all(e.data["reason"] == "quiet" for _, e in beats)
+    assert all(b[0] - a[0] >= timedelta(minutes=3) for a, b in zip(beats, beats[1:], strict=False))
+    assert beats[0][1].data["quiet_for_min"] >= 3
+
+
+def test_no_quiet_heartbeat_while_eta_keeps_changing():
+    track = syn.approach_track(ASSIGNED, 10, from_km=4.0)
+    tracker = warm_tracker(TrackerSettings(quiet_heartbeat_interval=timedelta(minutes=3)))
+    evs = _drive(tracker, lambda now: [g for g in track if g[0] <= now], minutes=9)
+    assert any(e.type == EVENT_ETA_CHANGED for _, e in evs)
+    assert not any(e.type == EVENT_HEARTBEAT for _, e in evs)
+
+
+def test_periodic_and_quiet_heartbeats_are_labelled():
+    stuck = [(ASSIGNED, syn.PICKUP[0] + 0.02, syn.PICKUP[1])]
+    tracker = warm_tracker(TrackerSettings(heartbeat_interval=timedelta(minutes=2)))
+    evs = _drive(tracker, lambda now: stuck, minutes=5)
+    assert {e.data["reason"] for _, e in evs if e.type == EVENT_HEARTBEAT} == {"periodic"}

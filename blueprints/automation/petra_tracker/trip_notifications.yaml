@@ -50,7 +50,7 @@ blueprint:
               value: car_not_assigned
             - label: ETA changed
               value: eta_changed
-            - label: Periodic update during a trip (heartbeat, if enabled in the integration)
+            - label: Heartbeat during a trip (periodic and/or after quiet minutes, as enabled in the integration)
               value: heartbeat
             - label: Tracking has no connection
               value: connection_degraded
@@ -95,6 +95,24 @@ blueprint:
           multiple: true
           filter:
             - domain: media_player
+    announce_eta_after_pickup:
+      name: Announce ETA changes after pickup
+      description: >-
+        Off: ETA changes on the way to the destination are not announced (status changes
+        still are). The car is still tracked and shown on the map.
+      default: true
+      selector:
+        boolean:
+    replace_notification:
+      name: Update one notification instead of adding new ones
+      description: >-
+        For the Home Assistant companion app: each child's messages replace the previous
+        notification (same tag) instead of piling up. Status changes still make a sound;
+        ETA updates and heartbeats update the notification silently. Leave off for other
+        notification services, which may not accept these options.
+      default: false
+      selector:
+        boolean:
     messages:
       name: Message texts
       icon: mdi:message-text-outline
@@ -286,6 +304,8 @@ variables:
   title: !input title
   tts_entity: !input tts_entity
   media_players: !input media_players
+  announce_eta_after_pickup: !input announce_eta_after_pickup
+  replace_notification: !input replace_notification
   ev: "{{ trigger.event.data }}"
   kind: >-
     {% set t = trigger.event.event_type | replace('petra_tracker_', '') %}
@@ -362,6 +382,10 @@ variables:
     {%- set ns = namespace(text=texts.get(text_key) or '') -%}
     {%- for k, v in placeholders.items() %}{% set ns.text = ns.text | replace(k, v | string) %}{% endfor -%}
     {{ ns.text }}
+  # Companion app: same tag = replace the previous notification; ETA updates and
+  # heartbeats update it without a sound.
+  notify_tag: "petra_tracker_{{ ev.get('person_id', 'account') }}"
+  quiet_update: "{{ kind in ['eta_changed', 'heartbeat'] }}"
   notify_title: >-
     {%- set ns = namespace(text=title or '') -%}
     {%- for k, v in placeholders.items() %}{% set ns.text = ns.text | replace(k, v | string) %}{% endfor -%}
@@ -378,16 +402,34 @@ conditions:
   # New, unknown *fields* are harmless; only notify about real API problems.
   - condition: template
     value_template: "{{ kind != 'schema_drift' or ev.severity != 'info' }}"
+  # Optionally no ETA announcements on the way to the destination.
+  - condition: template
+    value_template: >-
+      {{ kind != 'eta_changed' or announce_eta_after_pickup or ev.get('leg') != 'to_destination' }}
 
 actions:
   - if:
       - condition: template
         value_template: "{{ notify_action | trim != '' }}"
     then:
-      - action: "{{ notify_action | trim }}"
-        data:
-          title: "{{ notify_title }}"
-          message: "{{ message }}"
+      - if:
+          - condition: template
+            value_template: "{{ replace_notification }}"
+        then:
+          - action: "{{ notify_action | trim }}"
+            data:
+              title: "{{ notify_title }}"
+              message: "{{ message }}"
+              data:
+                tag: "{{ notify_tag }}"
+                alert_once: "{{ quiet_update }}"
+                push:
+                  interruption-level: "{{ 'passive' if quiet_update else 'active' }}"
+        else:
+          - action: "{{ notify_action | trim }}"
+            data:
+              title: "{{ notify_title }}"
+              message: "{{ message }}"
   - if:
       - condition: template
         value_template: "{{ tts_entity != '' and media_players | count > 0 }}"

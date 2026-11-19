@@ -200,3 +200,34 @@ async def test_distance_placeholder_and_decimal_separator(hass, setup_blueprint)
         "Alex: taxi says it's there (1,5 km away)",
         "Alex: taxi says it's there (? away)",
     ]
+
+
+async def test_eta_after_pickup_can_be_muted(hass, setup_blueprint):
+    notify, _ = await setup_blueprint(
+        notify_on=["eta_changed", "onboard"], announce_eta_after_pickup=False
+    )
+    await fire(hass, "eta_changed", person_name="Alex", old_eta=5, new_eta=4, leg="to_pickup")
+    await fire(hass, "state_changed", **state("onboard", "at_pickup"))
+    await fire(hass, "eta_changed", person_name="Alex", old_eta=9, new_eta=8, leg="to_destination")
+    assert [c.data["message"] for c in notify] == [
+        "Alex's taxi: 4 min to pickup.",
+        "Alex has been picked up.",  # status changes still come
+    ]
+
+
+async def test_one_updating_notification_per_child(hass, setup_blueprint):
+    notify, _ = await setup_blueprint(notify_on=["approaching", "eta_changed", "connection_degraded"],
+                                      replace_notification=True)
+    await fire(hass, "state_changed", **state("approaching", eta_minutes=7, person_id=501))
+    await fire(hass, "eta_changed", person_name="Alex", person_id=501, old_eta=7, new_eta=6, leg="to_pickup")
+    await fire(hass, "connection_degraded", failed_for_s=200, trip_active=True)
+    status_call, eta_call, account_call = (c.data["data"] for c in notify)
+    assert status_call == {"tag": "petra_tracker_501", "alert_once": False, "push": {"interruption-level": "active"}}
+    assert eta_call == {"tag": "petra_tracker_501", "alert_once": True, "push": {"interruption-level": "passive"}}
+    assert account_call["tag"] == "petra_tracker_account"
+
+
+async def test_no_extra_notification_data_by_default(hass, setup_blueprint):
+    notify, _ = await setup_blueprint()
+    await fire(hass, "state_changed", **state("approaching", eta_minutes=7))
+    assert "data" not in notify[0].data

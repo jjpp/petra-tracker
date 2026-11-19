@@ -76,7 +76,7 @@
           "idle_interval_min": "Poll interval when no trip is near",
           "lead_time_min": "Start fast polling this long before a scheduled pickup",
           "eta_granularity_min": "Fire ETA event when ETA changes by at least",
-          "heartbeat_min": "Heartbeat event interval during a trip (0 = off)",
+          "heartbeat_min": "Heartbeat every … minutes during a trip (0 = off)",
           "late_warning_min": "Warn if no car is assigned this long before pickup (0 = at pickup time)",
           "failure_alert_min": "Fire connection-degraded event after failing for",
           "track_onboard": "Track the car after pickup (ETA to destination)",
@@ -87,14 +87,17 @@
           "routing_url": "Routing server URL (optional)",
           "routing_api_key": "Routing API key",
           "waze_region": "Waze region",
-          "end_near_destination_m": "A trip ended within this distance of the destination counts as arrived"
+          "end_near_destination_m": "A trip ended within this distance of the destination counts as arrived",
+          "quiet_heartbeat_min": "Heartbeat when nothing was announced for … minutes (0 = off)"
         },
         "data_description": {
           "routing": "Straight line needs no external service. OSRM, OpenRouteService and Waze give road-based (Waze: live-traffic) ETAs, but receive the car's position and the trip's pickup and destination locations. If the engine fails, the straight-line estimate is used.",
           "routing_url": "Leave empty for the engine's public server (OSRM: the project-osrm.org demo server; please self-host for regular use). Set it to use your own OSRM or OpenRouteService server.",
           "routing_api_key": "Needed for the public OpenRouteService server (free key at openrouteservice.org).",
           "waze_region": "Only used with Waze.",
-          "end_near_destination_m": "Drivers often end the trip shortly before reaching the destination (seen: 300-550 m before the school). A trip ended farther away is reported as ended before the destination, with an estimated arrival."
+          "end_near_destination_m": "Drivers often end the trip shortly before reaching the destination (seen: 300-550 m before the school). A trip ended farther away is reported as ended before the destination, with an estimated arrival.",
+          "heartbeat_min": "A periodic \"still on the way, ETA N min\" event, regardless of other events.",
+          "quiet_heartbeat_min": "Only when the trip had no status change, ETA change or heartbeat for this long, e.g. the car is stuck and the ETA has not changed. Counts this integration's events: if your automation ignores ETA changes, use the periodic heartbeat instead."
         }
       }
     },

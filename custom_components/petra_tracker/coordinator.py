@@ -39,6 +39,7 @@ from .const import (
     OPT_IDLE_INTERVAL_MIN,
     OPT_LATE_WARNING_MIN,
     OPT_LEAD_TIME_MIN,
+    OPT_QUIET_HEARTBEAT_MIN,
     OPT_ROUTING,
     OPT_ROUTING_API_KEY,
     OPT_ROUTING_URL,
@@ -143,6 +144,7 @@ class PetraCoordinator(DataUpdateCoordinator[PetraData]):
             TrackerSettings(
                 eta_granularity_min=int(_opt(entry, OPT_ETA_GRANULARITY_MIN)),
                 heartbeat_interval=timedelta(minutes=heartbeat) if heartbeat else None,
+                quiet_heartbeat_interval=timedelta(minutes=quiet) if (quiet := _opt(entry, OPT_QUIET_HEARTBEAT_MIN)) else None,
                 late_warning_lead=timedelta(minutes=_opt(entry, OPT_LATE_WARNING_MIN)),
                 track_onboard=self.track_onboard,
                 end_near_destination_m=float(_opt(entry, OPT_END_NEAR_DESTINATION_M)),
@@ -358,7 +360,9 @@ class PetraCoordinator(DataUpdateCoordinator[PetraData]):
                 LOGGER.debug("Detail for a trip failed: %s", err)
                 continue
             await self._telemetry(now, "detail", str(trip.book_ref), det.data, det.status)
-            issues += self._handle_schema(SchemaValidator().order_detail(det.data), "order_detail", now)
+            issues += self._handle_schema(
+                SchemaValidator().order_detail(det.data, now=now), "order_detail", now
+            )
             if isinstance(det.data, dict):
                 trip.apply_detail(det.data)
 
