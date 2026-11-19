@@ -109,7 +109,9 @@ blueprint:
         For the Home Assistant companion app: each child's messages replace the previous
         notification (same tag) instead of piling up. Status changes still make a sound;
         ETA updates and heartbeats update the notification silently. Leave off for other
-        notification services, which may not accept these options.
+        notification services, which may not accept these options. If the push action is a
+        script, the script must pass its `data` field on to the notify action
+        (data: "{{ data | default({}) }}").
       default: false
       selector:
         boolean:

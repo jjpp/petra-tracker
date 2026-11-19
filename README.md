@@ -110,6 +110,20 @@ speaker (two automations from the same blueprint). Further options:
 - **Update one notification instead of adding new ones** (off): for the companion app — each
   child's messages replace the previous notification (same `tag`), status changes still make a
   sound, ETA updates and heartbeats update it silently. Leave off for other notification services.
+  If your push action is a **script**, it receives `title`, `message` and `data`; it must pass
+  `data` on to the notify action, otherwise the notifications pile up:
+
+  ```yaml
+  script:
+    notify_family:
+      fields: {title: {}, message: {}, data: {}}
+      sequence:
+        - action: notify.mobile_app_your_phone
+          data:
+            title: "{{ title }}"
+            message: "{{ message }}"
+            data: "{{ data | default({}) }}"   # or: dict(data | default({}), channel='Taxi')
+  ```
 
 ### The car on a map
 
