@@ -191,6 +191,7 @@ async def test_distance_placeholder_and_decimal_separator(hass, setup_blueprint)
     notify, _ = await setup_blueprint(
         msg_at_pickup="{child}: taxi says it's there ({distance} away)",
         decimal_separator=",",
+        at_pickup_far_m=0,  # always the "at pickup" text here
     )
     await fire(hass, "state_changed", **state("at_pickup", "approaching", distance_m=968))
     await fire(hass, "state_changed", **state("at_pickup", "approaching", distance_m=1460))
@@ -231,3 +232,57 @@ async def test_no_extra_notification_data_by_default(hass, setup_blueprint):
     notify, _ = await setup_blueprint()
     await fire(hass, "state_changed", **state("approaching", eta_minutes=7))
     assert "data" not in notify[0].data
+
+
+async def test_car_changed_and_location_unknown_messages(hass, setup_blueprint):
+    notify, _ = await setup_blueprint(notify_on=["approaching", "car_changed", "eta_changed", "heartbeat"])
+    await fire(hass, "state_changed", **state("approaching", location_known=False))
+    await fire(hass, "car_changed", **state("approaching", old_car_no=41, location_known=False))
+    await fire(hass, "eta_changed", person_name="Alex", status="approaching", old_eta=None,
+               new_eta=8, leg="to_pickup", location_known=True)
+    await fire(hass, "eta_changed", person_name="Alex", status="approaching", old_eta=8,
+               new_eta=None, leg="to_pickup", location_known=False)
+    await fire(hass, "heartbeat", person_name="Alex", status="approaching", eta_minutes=None,
+               location_known=False, reason="quiet")
+    await fire(hass, "heartbeat", person_name="Alex", status="approaching", eta_minutes=5,
+               leg="to_pickup", location_known=True, reason="quiet")
+    assert [c.data["message"] for c in notify] == [
+        "Alex's taxi is on its way; its location is not known yet.",
+        "Alex's taxi was changed from car 41 to car 42.",
+        "Alex's taxi: 8 min to pickup.",
+        "Alex's taxi: location not known.",
+        "Alex's taxi: on its way, location not known.",
+        "Alex's taxi: on its way, 5 min.",
+    ]
+
+
+async def test_car_changed_is_on_by_default(hass, setup_blueprint):
+    notify, _ = await setup_blueprint()
+    await fire(hass, "car_changed", **state("approaching", old_car_no=41, location_known=False))
+    assert [c.data["message"] for c in notify] == ["Alex's taxi was changed from car 41 to car 42."]
+
+
+async def test_arrived_while_still_far_away(hass, setup_blueprint):
+    notify, _ = await setup_blueprint()
+    await fire(hass, "state_changed", **state("at_pickup", "approaching", distance_m=1847, eta_minutes=6))
+    await fire(hass, "state_changed", **state("at_pickup", "approaching", distance_m=152, eta_minutes=1))
+    await fire(hass, "state_changed", **state("at_pickup", "approaching", distance_m=None))
+    assert [c.data["message"] for c in notify] == [
+        "Alex's taxi reports it has arrived, but is still 1.8 km away (about 6 min).",
+        "Alex's taxi has arrived.",
+        "Alex's taxi has arrived.",
+    ]
+
+
+async def test_arrived_far_away_threshold_can_be_changed_or_off(hass, setup_blueprint):
+    notify, _ = await setup_blueprint(at_pickup_far_m=0)
+    await fire(hass, "state_changed", **state("at_pickup", "approaching", distance_m=1847, eta_minutes=6))
+    assert [c.data["message"] for c in notify] == ["Alex's taxi has arrived."]
+
+
+async def test_arrived_far_away_custom_threshold(hass, setup_blueprint):
+    notify, _ = await setup_blueprint(at_pickup_far_m=100)
+    await fire(hass, "state_changed", **state("at_pickup", "approaching", distance_m=152, eta_minutes=1))
+    assert [c.data["message"] for c in notify] == [
+        "Alex's taxi reports it has arrived, but is still 150 m away (about 1 min)."
+    ]

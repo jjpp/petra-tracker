@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from custom_components.petra_tracker.core.eta import EtaParams, EtaSource, Leg, estimate_eta
 from custom_components.petra_tracker.core.models import Phase, parse_order, parse_order_list
 from custom_components.petra_tracker.core.tracker import (
+    EVENT_CAR_CHANGED,
     EVENT_CAR_NOT_ASSIGNED,
     EVENT_ETA_CHANGED,
     EVENT_HEARTBEAT,
@@ -447,3 +448,95 @@ def test_periodic_and_quiet_heartbeats_are_labelled():
     tracker = warm_tracker(TrackerSettings(heartbeat_interval=timedelta(minutes=2)))
     evs = _drive(tracker, lambda now: stuck, minutes=5)
     assert {e.data["reason"] for _, e in evs if e.type == EVENT_HEARTBEAT} == {"periodic"}
+
+
+# -- location not known / car changed -----------------------------------------------
+
+def driving(car_no: int, gps, now, tracker: TripTracker, **kw):
+    o = syn.order(combined=kw.pop("combined", "arriving"), car_no=car_no, assigned=ASSIGNED, **kw)
+    trips = parse_order_list(syn.order_list(o))
+    for t in trips_needing_detail(trips, True):
+        t.apply_detail(syn.detail(o, gps))
+    return tracker.update(trips, now)
+
+
+def test_eta_unknown_for_car_on_its_way_without_position():
+    o = syn.order(combined="arriving", car_no=syn.CAR_NO, assigned=ASSIGNED)
+    trip = trip_with_gps(o, [])
+    assert estimate_eta(trip, ASSIGNED, EtaParams()) is None  # not the schedule
+    onboard = syn.order(combined="personIn", state="customer", car_no=syn.CAR_NO,
+                        assigned=ASSIGNED, started=STARTED)
+    assert estimate_eta(trip_with_gps(onboard, []), STARTED, EtaParams()) is None
+
+
+def test_approaching_without_position_says_location_unknown():
+    tracker = warm_tracker()
+    persons, evs = driving(syn.CAR_NO, [], ASSIGNED, tracker)
+    (st,) = [e for e in evs if e.type == EVENT_STATE_CHANGED]
+    assert st.data["new_status"] == "approaching"
+    assert st.data["eta_minutes"] is None and st.data["location_known"] is False
+    assert persons[syn.PERSON_ID].eta is None
+    # The first position gives the ETA.
+    track = syn.approach_track(ASSIGNED, 8)
+    _, evs = driving(syn.CAR_NO, track[:1], ASSIGNED + timedelta(seconds=30), tracker)
+    (eta,) = [e for e in evs if e.type == EVENT_ETA_CHANGED]
+    assert eta.data["old_eta"] is None and eta.data["new_eta"] > 0 and eta.data["location_known"]
+
+
+def test_lost_position_is_announced_once_then_eta_again():
+    tracker = warm_tracker()
+    track = syn.approach_track(ASSIGNED, 8)
+    driving(syn.CAR_NO, track[:1], ASSIGNED, tracker)
+    _, evs = driving(syn.CAR_NO, [], ASSIGNED + timedelta(seconds=30), tracker)
+    (lost,) = [e for e in evs if e.type == EVENT_ETA_CHANGED]
+    assert lost.data["new_eta"] is None and lost.data["location_known"] is False
+    assert lost.data["leg"] == "to_pickup" and lost.data["old_eta"] > 0
+    _, evs = driving(syn.CAR_NO, [], ASSIGNED + timedelta(seconds=60), tracker)
+    assert not [e for e in evs if e.type == EVENT_ETA_CHANGED]  # no repeat
+    _, evs = driving(syn.CAR_NO, track[:2], ASSIGNED + timedelta(seconds=90), tracker)
+    (back,) = [e for e in evs if e.type == EVENT_ETA_CHANGED]
+    assert back.data["old_eta"] is None and back.data["new_eta"] > 0
+
+
+def test_car_change_is_announced_without_a_schedule_eta():
+    """Like a real afternoon trip: the car was replaced a minute after assignment,
+    and the new car had no position yet."""
+    tracker = warm_tracker()
+    track = syn.approach_track(ASSIGNED, 8)
+    driving(1, track[:1], ASSIGNED, tracker)
+    persons, evs = driving(2, [], ASSIGNED + timedelta(seconds=45), tracker)
+    assert [e.type for e in evs] == [EVENT_CAR_CHANGED]  # no "location unknown" on top
+    d = evs[0].data
+    assert (d["old_car_no"], d["car_no"], d["status"]) == (1, 2, "approaching")
+    assert d["eta_minutes"] is None and d["location_known"] is False
+    _, evs = driving(2, track[1:2], ASSIGNED + timedelta(seconds=60), tracker)
+    (eta,) = [e for e in evs if e.type == EVENT_ETA_CHANGED]
+    assert eta.data["old_eta"] is None and 1 <= eta.data["new_eta"] <= 10
+
+
+def test_car_number_on_a_booking_is_not_a_car_change():
+    tracker = warm_tracker()
+    o = syn.order(car_no=5)  # booked, with a planned car
+    tracker.update(parse_order_list(syn.order_list(o)), ASSIGNED - timedelta(minutes=5))
+    _, evs = driving(7, syn.approach_track(ASSIGNED, 8)[:1], ASSIGNED, tracker)
+    assert EVENT_CAR_CHANGED not in [e.type for e in evs]
+
+
+def test_car_change_memory_survives_restart():
+    before = warm_tracker()
+    driving(1, syn.approach_track(ASSIGNED, 8)[:1], ASSIGNED, before)
+    saved = json.loads(json.dumps(before.export_state(ASSIGNED)))
+    after = TripTracker()
+    assert after.restore_state(saved, ASSIGNED + timedelta(minutes=1))
+    _, evs = driving(2, [], ASSIGNED + timedelta(minutes=1), after)
+    assert [e.data["old_car_no"] for e in evs if e.type == EVENT_CAR_CHANGED] == [1]
+
+
+def test_restore_accepts_unknown_eta_and_older_state_without_cars():
+    before = warm_tracker()
+    driving(syn.CAR_NO, [], ASSIGNED, before)  # ETA announced as unknown
+    saved = json.loads(json.dumps(before.export_state(ASSIGNED)))
+    assert saved["announced_eta"] == {str(syn.BOOK_REF): None}
+    assert TripTracker().restore_state(saved, ASSIGNED + timedelta(minutes=1))
+    del saved["car_by_trip"]  # saved by 0.9
+    assert TripTracker().restore_state(saved, ASSIGNED + timedelta(minutes=1))

@@ -4,8 +4,8 @@ blueprint:
   description: >-
     Push notifications and/or spoken announcements for school / service transport trips
     tracked by the Petra Trip Tracker integration: car on its way, at pickup, picked up,
-    arrived, cancelled, no car assigned shortly before pickup, ETA updates, and problems
-    with the tracking itself.
+    arrived, cancelled, no car assigned shortly before pickup, car changed, ETA updates, and
+    problems with the tracking itself.
 
 
     It triggers only on the integration's events, which are not re-sent when Home
@@ -29,6 +29,7 @@ blueprint:
         - finished
         - cancelled
         - car_not_assigned
+        - car_changed
         - connection_degraded
         - token_expiring
         - schema_drift
@@ -48,6 +49,8 @@ blueprint:
               value: cancelled
             - label: No car assigned shortly before / after pickup time
               value: car_not_assigned
+            - label: The car was changed during the trip
+              value: car_changed
             - label: ETA changed
               value: eta_changed
             - label: Heartbeat during a trip (periodic and/or after quiet minutes, as enabled in the integration)
@@ -103,6 +106,21 @@ blueprint:
       default: true
       selector:
         boolean:
+    at_pickup_far_m:
+      name: '"Arrived" while still this far away'
+      description: >-
+        Drivers sometimes press "arrived" well before reaching the pickup (seen: 1.8 km,
+        10 minutes early). If the car's last position is farther than this from the pickup,
+        the "Arrived, but still away" message is sent instead of "Car at pickup". Cars that
+        really were there stood within about 150 m. 0 = off.
+      default: 300
+      selector:
+        number:
+          min: 0
+          max: 5000
+          step: 50
+          unit_of_measurement: m
+          mode: box
     replace_notification:
       name: Update one notification instead of adding new ones
       description: >-
@@ -123,7 +141,7 @@ blueprint:
         The text of each message. Placeholders are replaced with the trip's details
         (also in the notification title): {child} first name, {eta} minutes to the next
         stop, {old_eta} previous ETA, {leg} "pickup" or "destination", {status} trip status
-        in words, {car} car number, {pickup_time} scheduled pickup time (HH:MM),
+        in words, {car} car number, {old_car} previous car number (car changed), {pickup_time} scheduled pickup time (HH:MM),
         {distance} how far the car still is from the stop (e.g. "850 m", "3.2 km";
         drivers sometimes press "arrived" early), {arrival_time} estimated arrival when
         a trip was ended before the destination,
@@ -138,9 +156,23 @@ blueprint:
           default: "{child}'s taxi is on its way, about {eta} min."
           selector:
             text:
+        msg_approaching_no_location:
+          name: Car on its way, location not known
+          description: The car was assigned but has not sent a position yet, so there is no ETA.
+          default: "{child}'s taxi is on its way; its location is not known yet."
+          selector:
+            text:
         msg_at_pickup:
           name: Car at pickup
           default: "{child}'s taxi has arrived."
+          selector:
+            text:
+        msg_at_pickup_away:
+          name: Arrived, but still away
+          description: >-
+            The driver pressed "arrived" while the car was still farther from the pickup than
+            the '"Arrived" while still this far away' setting.
+          default: "{child}'s taxi reports it has arrived, but is still {distance} away (about {eta} min)."
           selector:
             text:
         msg_onboard:
@@ -176,14 +208,33 @@ blueprint:
           default: "{child}'s pickup time {pickup_time} has passed and no car is assigned yet."
           selector:
             text:
+        msg_car_changed:
+          name: Car changed
+          description: >-
+            Another car took over the trip. The new car usually has no position yet; the ETA
+            follows as an ETA update once it has one.
+          default: "{child}'s taxi was changed from car {old_car} to car {car}."
+          selector:
+            text:
         msg_eta_changed:
           name: ETA changed
           default: "{child}'s taxi: {eta} min to {leg}."
           selector:
             text:
+        msg_eta_unknown:
+          name: ETA changed, location not known
+          description: The car on its way stopped sending its position, so the ETA is unknown.
+          default: "{child}'s taxi: location not known."
+          selector:
+            text:
         msg_heartbeat:
           name: Periodic update
           default: "{child}'s taxi: {status}, {eta} min."
+          selector:
+            text:
+        msg_heartbeat_no_location:
+          name: Periodic update, location not known
+          default: "{child}'s taxi: {status}, location not known."
           selector:
             text:
         msg_connection_degraded:
@@ -293,6 +344,7 @@ triggers:
     event_type:
       - petra_tracker_state_changed
       - petra_tracker_car_not_assigned
+      - petra_tracker_car_changed
       - petra_tracker_eta_changed
       - petra_tracker_heartbeat
       - petra_tracker_connection_degraded
@@ -308,6 +360,7 @@ variables:
   media_players: !input media_players
   announce_eta_after_pickup: !input announce_eta_after_pickup
   replace_notification: !input replace_notification
+  at_pickup_far_m: !input at_pickup_far_m
   ev: "{{ trigger.event.data }}"
   kind: >-
     {% set t = trigger.event.event_type | replace('petra_tracker_', '') %}
@@ -315,21 +368,31 @@ variables:
   who: "{{ ev.get('person_name') or 'The child' }}"
   texts:
     approaching: !input msg_approaching
+    approaching_no_location: !input msg_approaching_no_location
     at_pickup: !input msg_at_pickup
+    at_pickup_away: !input msg_at_pickup_away
     onboard: !input msg_onboard
     finished: !input msg_finished
     finished_away: !input msg_finished_away
     cancelled: !input msg_cancelled
     car_not_assigned: !input msg_car_not_assigned
     car_not_assigned_late: !input msg_car_not_assigned_late
+    car_changed: !input msg_car_changed
     eta_changed: !input msg_eta_changed
+    eta_unknown: !input msg_eta_unknown
     heartbeat: !input msg_heartbeat
+    heartbeat_no_location: !input msg_heartbeat_no_location
     connection_degraded: !input msg_connection_degraded
     token_expiring: !input msg_token_expiring
     schema_drift: !input msg_schema_drift
   text_key: >-
     {% if kind == 'car_not_assigned' and ev.get('pickup_passed') %}car_not_assigned_late
     {%- elif kind == 'finished' and ev.get('ended_at_destination') == false %}finished_away
+    {%- elif kind == 'at_pickup' and at_pickup_far_m | float(0) > 0 and ev.get('distance_m') is not none
+         and ev.get('distance_m') > at_pickup_far_m | float(0) %}at_pickup_away
+    {%- elif kind in ['approaching', 'eta_changed', 'heartbeat'] and ev.get('location_known') == false %}
+    {{- {'approaching': 'approaching_no_location', 'eta_changed': 'eta_unknown',
+         'heartbeat': 'heartbeat_no_location'}[kind] }}
     {%- else %}{{ kind }}{% endif %}
   words:
     status:
@@ -361,6 +424,7 @@ variables:
       {% set s = ev.get('status') or ev.get('new_status') %}
       {{ words.status.get(s, s) if s else missing }}
     "{car}": "{{ ev.get('car_no') or missing }}"
+    "{old_car}": "{{ ev.get('old_car_no') or missing }}"
     "{pickup_time}": >-
       {% set p = as_datetime(ev.get('scheduled_pickup')) if ev.get('scheduled_pickup') else none %}
       {{ as_local(p).strftime(time_format) if p else missing }}

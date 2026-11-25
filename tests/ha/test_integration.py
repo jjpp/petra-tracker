@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import async_capture_events
 
 from custom_components.petra_tracker.const import (
+    EVENT_CAR_CHANGED,
     EVENT_CAR_NOT_ASSIGNED,
     EVENT_CONNECTION_DEGRADED,
     EVENT_CONNECTION_RESTORED,
@@ -391,3 +392,22 @@ async def test_no_schema_alert_for_missing_gps_at_assignment(hass, aioclient_moc
     await refresh(hass, entry)
     assert drift == [] and hass.states.get(SCHEMA).state == "ok"
     assert hass.states.get(STATUS).state == "approaching"
+
+
+async def test_car_change_and_unknown_location_in_ha(hass, aioclient_mock, frozen):
+    frozen.move_to(ASSIGNED + timedelta(minutes=1))
+    mock_api(aioclient_mock, *arriving(ASSIGNED + timedelta(minutes=1)))
+    entry = await setup(hass)
+    assert hass.states.get(ETA).attributes["location_known"] is True
+    changed = async_capture_events(hass, EVENT_CAR_CHANGED)
+
+    # Another car takes over and has no position yet.
+    frozen.move_to(ASSIGNED + timedelta(minutes=2))
+    other = syn.order(combined="arriving", car_no=syn.CAR_NO + 1, assigned=ASSIGNED)
+    mock_api(aioclient_mock, syn.order_list(other), syn.detail(other, []))
+    await refresh(hass, entry)
+    eta = hass.states.get(ETA)
+    assert eta.state == "unknown" and eta.attributes["location_known"] is False
+    assert [(e.data["old_car_no"], e.data["car_no"]) for e in changed] == [
+        (syn.CAR_NO, syn.CAR_NO + 1)
+    ]

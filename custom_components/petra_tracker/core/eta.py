@@ -28,7 +28,7 @@ class Leg(StrEnum):
 
 
 class EtaSource(StrEnum):
-    SCHEDULE = "schedule"  # no car position yet: minutes until scheduled pickup
+    SCHEDULE = "schedule"  # no car assigned yet: minutes until scheduled pickup
     GPS = "gps"  # computed from the car's last GPS fix
     ARRIVED = "arrived"  # car is at the waypoint
 
@@ -100,17 +100,23 @@ def estimate_eta(
     if target is not None and fix is not None:
         return _driving_eta(trip, *target, fix, now, params, pooled)
 
-    if trip.phase in (Phase.SCHEDULED, Phase.APPROACHING):
+    if trip.phase is Phase.SCHEDULED:
         if trip.scheduled_pickup is not None:
             minutes = math.ceil((trip.scheduled_pickup - now).total_seconds() / 60)
             return Eta(max(minutes, 0), Leg.TO_PICKUP, EtaSource.SCHEDULE, approximate=pooled)
         return None
     if trip.phase is Phase.AT_PICKUP:
         return Eta(0, Leg.TO_PICKUP, EtaSource.ARRIVED, last_fix=fix.time if fix else None)
-    if trip.phase is Phase.ONBOARD and track_onboard and trip.scheduled_dropoff is not None:
-        minutes = math.ceil((trip.scheduled_dropoff - now).total_seconds() / 60)
-        return Eta(max(minutes, 0), Leg.TO_DESTINATION, EtaSource.SCHEDULE, approximate=pooled)
+    # A car on its way without a position (just assigned, car changed, or the
+    # detail request failed): the ETA is unknown. The schedule is no stand-in
+    # here: right after a car change it said 35 min for a car 8 min away.
     return None
+
+
+def location_unknown(trip: Trip, track_onboard: bool = True) -> bool:
+    """The car is driving to a stop, but there is no GPS position for it."""
+    driving = trip.phase is Phase.APPROACHING or (trip.phase is Phase.ONBOARD and track_onboard)
+    return driving and trip.last_fix is None
 
 
 # -- how far from the stop, and how did the trip end? --------------------------

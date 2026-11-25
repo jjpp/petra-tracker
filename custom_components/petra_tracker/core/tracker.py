@@ -18,6 +18,7 @@ from .eta import (
     EtaParams,
     TripEnding,
     estimate_eta,
+    location_unknown,
     trip_ending,
     waypoint_distance_m,
 )
@@ -27,6 +28,7 @@ EVENT_STATE_CHANGED = "state_changed"
 EVENT_ETA_CHANGED = "eta_changed"
 EVENT_HEARTBEAT = "heartbeat"
 EVENT_CAR_NOT_ASSIGNED = "car_not_assigned"
+EVENT_CAR_CHANGED = "car_changed"
 
 STATE_FORMAT_VERSION = 1
 DEFAULT_RESTORE_MAX_AGE = timedelta(minutes=30)
@@ -68,14 +70,19 @@ class TrackerEvent:
 @dataclass
 class _Memory:
     phase_by_trip: dict[int, Phase] = field(default_factory=dict)
-    announced_eta: dict[int, int] = field(default_factory=dict)
+    # Last announced ETA; None = announced as unknown (car without a position).
+    announced_eta: dict[int, int | None] = field(default_factory=dict)
+    # Car seen while the trip was under way (a car number on a mere booking is
+    # only a plan and changes freely, so it does not count).
+    car_by_trip: dict[int, int] = field(default_factory=dict)
     last_heartbeat: dict[int, datetime] = field(default_factory=dict)
     late_warned: set[int] = field(default_factory=set)
     last_event_at: dict[int, datetime] = field(default_factory=dict)  # any event for the trip
 
     def prune(self, keep: set[int]) -> None:
         """Forget trips that are no longer in the API window (e.g. yesterday's)."""
-        for d in (self.phase_by_trip, self.announced_eta, self.last_heartbeat, self.last_event_at):
+        for d in (self.phase_by_trip, self.announced_eta, self.car_by_trip, self.last_heartbeat,
+                  self.last_event_at):
             for ref in [r for r in d if r not in keep]:
                 del d[ref]
         self.late_warned &= keep
@@ -171,11 +178,20 @@ class TripTracker:
                 ending=self._endings.get(trip.book_ref) if trip and trip.phase is Phase.FINISHED else None,
             )
             person_events: list[TrackerEvent] = []
+            car_changed: set[int] = set()
             for t in ptrips:
                 person_events.extend(self._phase_events(t, persons[pid] if t is trip else None, name, now))
                 person_events.extend(self._late_events(t, name, now))
+                car_events = self._car_events(t, persons[pid] if t is trip else None, name)
+                if car_events:
+                    car_changed.add(t.book_ref)
+                person_events.extend(car_events)
             if trip is not None:
-                person_events.extend(self._eta_events(trip, eta, name, now))
+                # Right after a car change the new car has no position yet; the
+                # car change itself says so, no separate "location unknown".
+                person_events.extend(
+                    self._eta_events(trip, eta, name, now, quiet_unknown=trip.book_ref in car_changed)
+                )
             for ev in person_events:
                 self._mem.last_event_at[ev.data["book_ref"]] = now
             if trip is not None:
@@ -206,6 +222,7 @@ class TripTracker:
             "saved_at": now.isoformat(),
             "phase_by_trip": {str(k): v.value for k, v in m.phase_by_trip.items()},
             "announced_eta": {str(k): v for k, v in m.announced_eta.items()},
+            "car_by_trip": {str(k): v for k, v in m.car_by_trip.items()},
             "late_warned": sorted(m.late_warned),
         }
 
@@ -221,11 +238,13 @@ class TripTracker:
             if not timedelta(0) <= now - saved_at <= max_age:
                 return False
             phases = {int(k): Phase(v) for k, v in data["phase_by_trip"].items()}
-            etas = {int(k): int(v) for k, v in data["announced_eta"].items()}
+            etas = {int(k): None if v is None else int(v) for k, v in data["announced_eta"].items()}
+            cars = {int(k): int(v) for k, v in data.get("car_by_trip", {}).items()}  # since 0.10
             warned = {int(r) for r in data["late_warned"]}
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, AttributeError):
             return False
-        self._mem = _Memory(phase_by_trip=phases, announced_eta=etas, late_warned=warned)
+        self._mem = _Memory(phase_by_trip=phases, announced_eta=etas, car_by_trip=cars,
+                            late_warned=warned)
         self._warm = True
         return True
 
@@ -238,6 +257,13 @@ class TripTracker:
             "car_no": trip.car_no,
             "scheduled_pickup": trip.scheduled_pickup.isoformat() if trip.scheduled_pickup else None,
         }
+
+    def _location_known(self, trip: Trip) -> bool | None:
+        """False: the car is on its way but its position is not known. None: no
+        car on the way (not assigned yet, or the trip is over)."""
+        if trip.phase not in ACTIVE_PHASES:
+            return None
+        return not location_unknown(trip, self.settings.track_onboard)
 
     def _phase_events(
         self, trip: Trip, state: PersonState | None, name: str | None, now: datetime
@@ -258,6 +284,7 @@ class TripTracker:
             "new_status": trip.phase.value,
             "raw_status": trip.combined_status,
             "eta_minutes": eta.minutes if eta else None,
+            "location_known": self._location_known(trip),
             # Car's last known distance to the stop of this phase: "arrived" may be
             # pressed before the car is there.
             "distance_m": round(distance) if distance is not None else None,
@@ -298,31 +325,54 @@ class TripTracker:
             )
         ]
 
+    def _car_events(
+        self, trip: Trip, state: PersonState | None, name: str | None
+    ) -> list[TrackerEvent]:
+        """The car of a trip under way was replaced by another one."""
+        if trip.phase not in ACTIVE_PHASES or trip.car_no is None:
+            return []
+        old = self._mem.car_by_trip.get(trip.book_ref)
+        self._mem.car_by_trip[trip.book_ref] = trip.car_no
+        if old is None or old == trip.car_no:
+            return []
+        eta = state.eta if state else None
+        return [
+            TrackerEvent(
+                EVENT_CAR_CHANGED,
+                {
+                    **self._base(trip, name),
+                    "status": trip.phase.value,
+                    "old_car_no": old,
+                    "eta_minutes": eta.minutes if eta else None,
+                    "leg": eta.leg.value if eta else None,
+                    "location_known": self._location_known(trip),
+                },
+            )
+        ]
+
     def _eta_events(
-        self, trip: Trip, eta: Eta | None, name: str | None, now: datetime
+        self, trip: Trip, eta: Eta | None, name: str | None, now: datetime,
+        quiet_unknown: bool = False,
     ) -> list[TrackerEvent]:
         s = self.settings
         out: list[TrackerEvent] = []
         ref = trip.book_ref
-        if eta is not None and trip.phase in ACTIVE_PHASES:
-            last = self._mem.announced_eta.get(ref)
-            if last is None:
-                self._mem.announced_eta[ref] = eta.minutes
-            elif abs(eta.minutes - last) >= max(s.eta_granularity_min, 1):
-                self._mem.announced_eta[ref] = eta.minutes
-                out.append(
-                    TrackerEvent(
-                        EVENT_ETA_CHANGED,
-                        {
-                            **self._base(trip, name),
-                            "status": trip.phase.value,
-                            "old_eta": last,
-                            "new_eta": eta.minutes,
-                            "leg": eta.leg.value,
-                            "eta_source": eta.source.value,
-                        },
-                    )
-                )
+        minutes = eta.minutes if eta else None
+        unknown = location_unknown(trip, s.track_onboard)
+        if trip.phase in ACTIVE_PHASES and (eta is not None or unknown):
+            mem = self._mem.announced_eta
+            last = mem.get(ref)
+            if ref not in mem:
+                mem[ref] = minutes  # first value: the status change announces it
+            elif minutes is None or last is None:
+                # Position lost (ETA now unknown) or found again (ETA known again).
+                if minutes != last:
+                    mem[ref] = minutes
+                    if not (minutes is None and quiet_unknown):
+                        out.append(self._eta_event(trip, eta, last, name))
+            elif abs(minutes - last) >= max(s.eta_granularity_min, 1):
+                mem[ref] = minutes
+                out.append(self._eta_event(trip, eta, last, name))
         if s.heartbeat_interval and trip.phase in ACTIVE_PHASES:
             last_hb = self._mem.last_heartbeat.get(ref)
             if last_hb is None:
@@ -337,11 +387,31 @@ class TripTracker:
                             "status": trip.phase.value,
                             "eta_minutes": eta.minutes if eta else None,
                             "leg": eta.leg.value if eta else None,
+                            "location_known": self._location_known(trip),
                             "reason": "periodic",
                         },
                     )
                 )
         return out
+
+    def _eta_event(
+        self, trip: Trip, eta: Eta | None, old: int | None, name: str | None
+    ) -> TrackerEvent:
+        leg = eta.leg.value if eta else (
+            "to_destination" if trip.phase is Phase.ONBOARD else "to_pickup"
+        )
+        return TrackerEvent(
+            EVENT_ETA_CHANGED,
+            {
+                **self._base(trip, name),
+                "status": trip.phase.value,
+                "old_eta": old,
+                "new_eta": eta.minutes if eta else None,  # None: location not known
+                "leg": leg,
+                "eta_source": eta.source.value if eta else None,
+                "location_known": self._location_known(trip),
+            },
+        )
 
     def _quiet_events(
         self, trip: Trip, eta: Eta | None, name: str | None, now: datetime
@@ -368,6 +438,7 @@ class TripTracker:
                     "status": trip.phase.value,
                     "eta_minutes": eta.minutes if eta else None,
                     "leg": eta.leg.value if eta else None,
+                    "location_known": self._location_known(trip),
                     "reason": "quiet",
                     "quiet_for_min": int(quiet_for.total_seconds() // 60),
                 },

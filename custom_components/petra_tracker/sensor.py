@@ -14,6 +14,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from . import PetraConfigEntry
 from .const import STATUS_IDLE
 from .coordinator import PetraCoordinator
+from .core.eta import location_unknown
 from .core.models import Phase
 from .core.schema import schema_version
 from .entity import PetraAccountEntity, PetraPersonEntity, add_person_entities
@@ -113,8 +114,13 @@ class EtaSensor(PetraPersonEntity, SensorEntity):
         p = self.person
         e = p.eta if p else None
         if e is None:
+            trip = p.trip if p else None
+            if trip is not None and location_unknown(trip, self.coordinator.tracker.settings.track_onboard):
+                # The car is on its way, but its position (and so the ETA) is unknown.
+                return {"location_known": False}
             return {}
         return {
+            "location_known": True,
             "leg": e.leg.value,
             "source": e.source.value,
             "distance_m": round(e.distance_m) if e.distance_m is not None else None,

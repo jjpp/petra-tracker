@@ -148,7 +148,9 @@ Centralised so the trap can't recur.
 - Target by leg: `arriving/arrived` → **pickup**; `personIn/customer` → **destination (school)**.
 - Routed drive-time via a pluggable provider (§7); fallback haversine + smoothed speed.
 - Output `eta_minutes` (int), `distance_m`, `leg`, `speed_kmh`, `last_fix_ts`.
-- Pre-assignment (no GPS): `eta_minutes = null` → show scheduled `pickUpDateTime`.
+- Pre-assignment (no car): ETA = minutes until the scheduled `pickUpDateTime` (`source: schedule`).
+- Car on its way without GPS (just assigned, car changed, detail failed): ETA unknown
+  (`location_known: false`); not the schedule.
 - Smoothing/EMA so the announced minute doesn't flap; dedupe repeated fixes.
 
 ### 4.7 TelemetryStore — **HA only, opt-in**
@@ -177,6 +179,10 @@ HACS custom component `custom_components/petra_tracker`, UI config flow,
   minute changes (granularity configurable, default 1 min)
 - `petra_tracker_heartbeat` `{child, book_ref, state, eta_minutes}` — periodic "still going"
   signal while active (see §8 on how this relates to poll frequency)
+- `petra_tracker_car_changed` `{child, book_ref, old_car_no, car_no, status, eta_minutes,
+  location_known}` — another car took over a trip under way (car numbers on a mere booking are
+  plans and do not count). Trip events carry `location_known: false` while a car on its way has
+  no position; its ETA is then unknown (`null`), never a guess from the schedule.
 - `petra_tracker_car_not_assigned` `{child, book_ref, scheduled_pickup, minutes_to_pickup,
   pickup_passed}` — once per trip, when it is still only booked a configurable time before pickup
   (default 1 min) or after the pickup time

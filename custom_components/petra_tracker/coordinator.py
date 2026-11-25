@@ -356,7 +356,7 @@ class PetraCoordinator(DataUpdateCoordinator[PetraData]):
             try:
                 det = await self.client.order_detail(trip.book_ref)
             except (PetraTransientError, PetraEndpointError) as err:
-                # Keep going without live position; ETA falls back to the schedule.
+                # Keep going without live position; the ETA is unknown meanwhile.
                 LOGGER.debug("Detail for a trip failed: %s", err)
                 continue
             await self._telemetry(now, "detail", str(trip.book_ref), det.data, det.status)
